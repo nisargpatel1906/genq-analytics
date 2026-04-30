@@ -1,0 +1,55 @@
+@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,500;0,600;0,700;0,900;1,400;1,700&family=DM+Mono:ital,wght@0,300;0,400;0,500;1,300;1,400&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --color-bg:        #F5F0E8;  /* Page background */
+  --color-fg:        #1A1208;  /* Primary text */
+  --color-surface:   #EDE4D0;  /* Card backgrounds */
+  --color-border:    #D4C9B0;  /* Dividers, borders */
+  --color-accent:    #8B6F3E;  /* CTAs, highlights, active */
+  --color-accent-hover: #A68B5B;
+  --color-accent-muted: #C2A87A;
+
+  /* Semantic */
+  --color-success:   #5C6E3E;
+  --color-warning:   #B8860B;
+  --color-error:     #8B3A3A;
+  --color-info:      #3A5F8B;
+
+  --font-heading: 'Playfair Display', Georgia, serif;
+  --font-body:    'DM Mono', 'Courier New', monospace;
+
+  --shadow-sm:  0 1px 3px rgba(26,18,8,0.08);
+  --shadow-md:  0 4px 12px rgba(26,18,8,0.10);
+  --shadow-lg:  0 8px 24px rgba(26,18,8,0.12);
+  --shadow-xl:  0 16px 48px rgba(26,18,8,0.14);
+}
+
+body {
+  font-family: var(--font-body);
+  background: var(--color-bg);
+  color: var(--color-fg);
+  min-height: 100vh;
+}
+
+h1, h2, h3, h4 {
+  font-family: var(--font-heading);
+}
+
+@layer utilities {
+  .shadow-custom-sm {
+    box-shadow: var(--shadow-sm);
+  }
+  .shadow-custom-md {
+    box-shadow: var(--shadow-md);
+  }
+  .shadow-custom-lg {
+    box-shadow: var(--shadow-lg);
+  }
+  .shadow-custom-xl {
+    box-shadow: var(--shadow-xl);
+  }
+}

@@ -1,0 +1,27 @@
+# Environment Variables
+.env
+.env.local
+
+# Backend
+backend/venv/
+backend/__pycache__/
+backend/*.pyc
+backend/*.pdf
+backend/reports_store.json
+backend/genq_analytics.log
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.npm/
+
+# Graphify Output
+graphify-out/
+
+# IDEs and OS Files
+.vscode/
+.idea/
+.DS_Store
+*.swp
+.antigravityrules
+.docx

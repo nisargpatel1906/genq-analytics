@@ -7,15 +7,7 @@ export function Landing() {
       <div className="max-w-7xl w-full mx-auto flex flex-col items-center justify-center text-center">
         
         <div className="flex flex-col items-center space-y-8 max-w-2xl">
-          <div className="flex items-center gap-2">
-            <span className="relative flex h-2 w-2">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-accent opacity-75"></span>
-              <span className="relative inline-flex rounded-full h-2 w-2 bg-accent"></span>
-            </span>
-            <span className="font-body text-[10px] text-accent font-medium uppercase tracking-widest">
-              GenQ Analytics V2.5 Live
-            </span>
-          </div>
+          {/* Removed pinging indicator as requested */}
           
           <h1 className="font-heading text-[56px] leading-[1.1] text-fg tracking-tight">
             From Raw Data to<br/>

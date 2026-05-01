@@ -6,7 +6,9 @@ from fastapi import APIRouter, UploadFile, File, BackgroundTasks
 from services.analyzer import extract_statistics, analyze_dataframe
 from services.visualizer import generate_chart_configs
 import io
+import numpy as np
 from app.db import jobs, reports_db
+from app.utils import sanitize_json
 
 logger = logging.getLogger("genq_api.upload")
 
@@ -57,10 +59,9 @@ def process_file_task(job_id: str, file_content: bytes, filename: str):
         # Convert non-JSON-safe types
         for col in sample.select_dtypes(include=['datetime64']).columns:
             sample[col] = sample[col].astype(str)
-        sample = sample.where(pd.notnull(sample), None)
-        # Replace inf/-inf with None
-        import numpy as np
-        sample = sample.replace([np.inf, -np.inf], None)
+        
+        # Replace NaN and Inf with None (JSON-safe)
+        sample = sample.replace({np.nan: None, np.inf: None, -np.inf: None})
         
         # Store column type metadata for chart reasoning
         col_types = {
@@ -72,7 +73,7 @@ def process_file_task(job_id: str, file_content: bytes, filename: str):
         binary_cols = [c for c in col_types["numeric"] if df[c].nunique() == 2 and set(df[c].dropna().unique()).issubset({0, 1, True, False})]
         col_types["binary"] = binary_cols
         
-        reports_db[report_id] = {
+        reports_db[report_id] = sanitize_json({
             "id": report_id,
             "filename": filename,
             "created_at": datetime.now().strftime("%b %d, %Y"),
@@ -81,7 +82,7 @@ def process_file_task(job_id: str, file_content: bytes, filename: str):
             "report": ai_report,
             "data_sample": sample.to_dict('records'),
             "col_types": col_types,
-        }
+        })
         
         # Step 4
         jobs[job_id]["step"] = 4

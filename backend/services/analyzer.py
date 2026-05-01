@@ -123,12 +123,16 @@ def extract_statistics(df: pd.DataFrame) -> dict:
     stats["missing_values"] = df.isnull().sum().to_dict()
     
     # Replace NaN and Inf with None for JSON compliance
-    desc = df[numeric_cols].describe().replace({np.nan: None, np.inf: None, -np.inf: None})
-    stats["numeric_summary"] = desc.to_dict()
-    
-    if len(numeric_cols) > 1:
-        corr = df[numeric_cols].corr().replace({np.nan: None, np.inf: None, -np.inf: None})
-        stats["correlations"] = corr.to_dict()
+    if not numeric_cols.empty:
+        desc = df[numeric_cols].describe().replace({np.nan: None, np.inf: None, -np.inf: None})
+        stats["numeric_summary"] = desc.to_dict()
+        
+        if len(numeric_cols) > 1:
+            corr = df[numeric_cols].corr().replace({np.nan: None, np.inf: None, -np.inf: None})
+            stats["correlations"] = corr.to_dict()
+    else:
+        stats["numeric_summary"] = {}
+        stats["correlations"] = {}
     
     # Outlier detection (Z-score > 3 sigma)
     anomalies = []

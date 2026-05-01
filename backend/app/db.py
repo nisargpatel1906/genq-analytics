@@ -1,5 +1,8 @@
 import json
 import os
+import logging
+
+logger = logging.getLogger("genq_api.db")
 
 DB_FILE = os.path.join(os.path.dirname(__file__), '..', 'reports_store.json')
 
@@ -22,7 +25,7 @@ def _save_reports(db: dict):
         with open(DB_FILE, 'w', encoding='utf-8') as f:
             json.dump(db, f, ensure_ascii=False, indent=2)
     except Exception as e:
-        print(f"[DB] Failed to save reports: {e}")
+        logger.error(f"[DB] Failed to save reports: {e}")
 
 class PersistentReportsDB(dict):
     """A dict that automatically persists on writes."""

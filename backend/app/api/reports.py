@@ -1,5 +1,6 @@
 from fastapi import APIRouter, HTTPException
 from app.db import reports_db
+from app.utils import sanitize_json
 
 router = APIRouter()
 
@@ -7,7 +8,8 @@ router = APIRouter()
 async def get_report(report_id: str):
     if report_id not in reports_db:
         raise HTTPException(status_code=404, detail="Report not found")
-    return reports_db[report_id]
+    report_data = reports_db[report_id]
+    return sanitize_json(report_data)
 
 @router.delete("/reports/{report_id}")
 async def delete_report(report_id: str):

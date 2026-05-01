@@ -5,8 +5,8 @@ import { Dashboard } from './pages/Dashboard';
 import { Report } from './pages/Report';
 import { Library } from './pages/Library';
 import { Methodology } from './pages/Methodology';
-import { DataPrivacy } from './pages/DataPrivacy';
-import { TermsOfService } from './pages/TermsOfService';
+import { DataPrivacy } from './pages/Privacy';
+import { TermsOfService } from './pages/Terms';
 import { Navbar } from './components/layout/Navbar';
 import { Footer } from './components/layout/Footer';
 

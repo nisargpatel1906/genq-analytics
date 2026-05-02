@@ -80,6 +80,7 @@ export function Library() {
 
           {/* Sort + Refresh */}
           <div className="flex items-center gap-3 w-full md:w-auto justify-end">
+            {/* TODO: Implement date-based sorting */}
             <Button variant="ghost" className="gap-2 text-fg py-2 h-auto text-[13px]">
               Latest <ArrowDown className="w-3.5 h-3.5" />
             </Button>

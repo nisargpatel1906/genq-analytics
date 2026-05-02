@@ -182,7 +182,7 @@ def build_charts(report_data: dict) -> list:
                     ax.scatter(plot_df[col_a], plot_df[col_b], alpha=0.5, color=TABLEAU10[0], s=28)
 
                 z = np.polyfit(plot_df[col_a].fillna(0), plot_df[col_b].fillna(0), 1)
-                xline = np.linspace(plot_df[col_a].min(), plot_df[col_b].max(), 100)
+                xline = np.linspace(plot_df[col_a].min(), plot_df[col_a].max(), 100)
                 ax.plot(xline, np.poly1d(z)(xline), "--", color="#E15759", linewidth=1.5, label=f"r={best_r:.2f}")
                 ax.legend(fontsize=8)
                 ax.set_xlabel(col_a, fontsize=9)

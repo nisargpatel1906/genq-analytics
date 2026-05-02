@@ -10,7 +10,6 @@ export function Footer() {
         <div className="flex items-center gap-6 font-body text-[11px] text-fg/50">
           <Link to="/methodology" className="hover:text-fg transition-colors">Methodology</Link>
           <Link to="/privacy" className="hover:text-fg transition-colors">Data Privacy</Link>
-          <a href="#" className="hover:text-fg transition-colors">API Documentation</a>
           <Link to="/terms" className="hover:text-fg transition-colors">Terms of Service</Link>
         </div>
       </div>

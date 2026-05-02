@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { FileText, BarChart2, CheckCircle2, Loader2, Circle, UploadCloud } from 'lucide-react';
+import { FileText, BarChart2, CheckCircle2, Loader2, Circle } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { Button } from '../components/ui/Button';
 import { Badge } from '../components/ui/Badge';

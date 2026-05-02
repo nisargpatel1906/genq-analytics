@@ -34,5 +34,6 @@ graphify-out/
 .DS_Store
 *.swp
 .antigravityrules
+.antigravityrules
 .docs
 .docx

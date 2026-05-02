@@ -4,7 +4,6 @@ import pandas as pd
 from datetime import datetime
 from fastapi import APIRouter, UploadFile, File, BackgroundTasks
 from services.analyzer import extract_statistics, analyze_dataframe
-from services.visualizer import generate_chart_configs
 import io
 import numpy as np
 from app.db import jobs, reports_db
@@ -48,9 +47,7 @@ def process_file_task(job_id: str, file_content: bytes, filename: str):
         
         # Step 3
         jobs[job_id]["step"] = 3
-        jobs[job_id]["status"] = "Building AI-suggested visualizations..."
-        
-        configs = generate_chart_configs(df, ai_report)
+        jobs[job_id]["status"] = "Preparing visual engine..."
         
         report_id = f"rep_{uuid.uuid4().hex[:8]}"
         
@@ -78,7 +75,6 @@ def process_file_task(job_id: str, file_content: bytes, filename: str):
             "filename": filename,
             "created_at": datetime.now().strftime("%b %d, %Y"),
             "stats": stats,
-            "configs": configs,
             "report": ai_report,
             "data_sample": sample.to_dict('records'),
             "col_types": col_types,

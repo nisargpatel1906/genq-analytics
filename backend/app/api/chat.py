@@ -4,7 +4,6 @@ import json
 import os
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-from typing import List
 from app.db import reports_db
 from dotenv import load_dotenv
 
@@ -23,7 +22,7 @@ class ChatMessage(BaseModel):
 
 class ChatRequest(BaseModel):
     message: str
-    history: List[ChatMessage] = []
+    history: list[ChatMessage] = []
 
 
 CHAT_SYSTEM = """\

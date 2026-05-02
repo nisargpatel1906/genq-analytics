@@ -4,6 +4,7 @@ import numpy as np
 import json
 import os
 import requests
+import re
 from dotenv import load_dotenv
 
 logger = logging.getLogger("genq_api.analyzer")
@@ -42,15 +43,6 @@ Output ONLY this exact JSON schema:
   ],
   "recommendations": [
     { "action": "string", "rationale": "string", "priority": "high|medium|low" }
-  ],
-  "suggestedCharts": [
-    {
-      "type": "AreaChart|BarChart|ScatterChart|PieChart|Heatmap",
-      "title": "string",
-      "rationale": "string (why this chart for this data)",
-      "xKey": "column_name",
-      "yKey": "column_name"
-    }
   ]
 }
 """
@@ -69,7 +61,6 @@ def parse_report_json(content: str) -> dict:
     content = content.strip()
     
     # Strip LaTeX formatting if the LLM hallucinates it
-    import re
     content = re.sub(r'\$\\text\{([a-zA-Z]+)\}\s*=\s*([0-9\.]+)\$', r'\1 = \2', content)
     content = content.replace('$', '')
     content = content.replace('\\n', ' ')

@@ -41,3 +41,6 @@ graphify-out/
 .docs
 .docx
 .pytest_cache
+
+# Allow sample report
+!Iris_report.pdf

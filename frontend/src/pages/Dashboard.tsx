@@ -1,13 +1,12 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { Sparkles, Send, MessageSquare, X, Loader2, Bot, User, FileText, AlertTriangle, Target } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { Sparkles, Send, MessageSquare, X, Loader2, Bot, User, FileText, AlertTriangle, Target, ShieldCheck, CheckCircle2, RefreshCw, Clock } from 'lucide-react';
 import { Button } from '../components/ui/Button';
 import { Badge } from '../components/ui/Badge';
 import { motion, AnimatePresence } from 'framer-motion';
-import { useSearchParams } from 'react-router-dom';
-
-// ─── Types ────────────────────────────────────────────────────────────────────
-interface ChatMsg { role: 'user' | 'assistant'; content: string; }
-interface ChartItem { title: string; interpretation: string; image: string; }
+import { useSearchParams, useNavigate } from 'react-router-dom';
+import { API_URL, apiHeaders } from '../lib/api';
+import { useAnalysisStore } from '../store/useAnalysisStore';
+import type { ChatMsg } from '../store/useAnalysisStore';
 
 // ─── Quick-prompt suggestions ─────────────────────────────────────────────────
 const SUGGESTIONS = [
@@ -20,12 +19,9 @@ const SUGGESTIONS = [
 
 // ─── Chat Panel ───────────────────────────────────────────────────────────────
 function ChatPanel({ reportId, onClose }: { reportId: string; onClose: () => void }) {
-  const [messages, setMessages] = useState<ChatMsg[]>([
-    {
-      role: 'assistant',
-      content: `Hi! I've read your dataset report. Ask me anything — I can explain findings, rewrite sections, highlight risks, or suggest next steps.`,
-    },
-  ]);
+  const [providerLabel, setProviderLabel] = useState('Configured AI provider');
+  const { getMessages, addMessage, setMessages } = useAnalysisStore();
+  const messages = getMessages(reportId);
   const [input, setInput] = useState('');
   const [thinking, setThinking] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -34,24 +30,69 @@ function ChatPanel({ reportId, onClose }: { reportId: string; onClose: () => voi
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, thinking]);
 
+  useEffect(() => {
+    fetch(`${API_URL}/api/llm/status`, { headers: apiHeaders() })
+      .then(r => r.json())
+      .then(data => {
+        if (data.mode !== 'single') {
+          setProviderLabel(`agent workflow; chat ${data.chat || 'configured'}`);
+        } else {
+          setProviderLabel(data.chat || 'Configured AI provider');
+        }
+      })
+      .catch(() => setProviderLabel('Configured AI provider'));
+  }, []);
+
   const send = async (text: string) => {
     if (!text.trim() || thinking) return;
     const userMsg: ChatMsg = { role: 'user', content: text };
     const history = [...messages];
-    setMessages(prev => [...prev, userMsg]);
+    addMessage(reportId, userMsg);
     setInput('');
     setThinking(true);
 
     try {
-      const resp = await fetch(`http://localhost:8000/api/reports/${reportId}/chat`, {
+      const resp = await fetch(`${API_URL}/api/reports/${reportId}/chat`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: apiHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ message: text, history }),
       });
-      const data = await resp.json();
-      setMessages(prev => [...prev, { role: 'assistant', content: data.reply || 'Sorry, I got an empty response.' }]);
+
+      if (!resp.ok) throw new Error('Server error');
+
+      const reader = resp.body?.getReader();
+      if (!reader) throw new Error('No stream');
+
+      const decoder = new TextDecoder();
+      let assistantContent = '';
+      let buffer = '';
+
+      setMessages(reportId, [...history, userMsg, { role: 'assistant' as const, content: '' }]);
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            const data = line.slice(6);
+            if (data === '[DONE]') break;
+            if (data.startsWith('[ERROR]')) {
+              assistantContent += data.replace('[ERROR] ', '');
+            } else {
+              assistantContent += data;
+            }
+            const updated = [...history, userMsg, { role: 'assistant' as const, content: assistantContent }];
+            setMessages(reportId, updated);
+          }
+        }
+      }
     } catch {
-      setMessages(prev => [...prev, { role: 'assistant', content: 'Connection error. Is the backend running?' }]);
+      setMessages(reportId, [...history, userMsg, { role: 'assistant' as const, content: 'Connection error. Is the backend running?' }]);
     } finally {
       setThinking(false);
     }
@@ -73,7 +114,7 @@ function ChatPanel({ reportId, onClose }: { reportId: string; onClose: () => voi
           </div>
           <div>
             <p className="font-body font-semibold text-[13px] text-fg">Report Assistant</p>
-            <p className="font-body text-[10px] text-fg/50">Powered by your local Ollama model</p>
+            <p className="font-body text-[10px] text-fg/50">Powered by {providerLabel}</p>
           </div>
         </div>
         <button onClick={onClose} className="text-fg/40 hover:text-fg transition-colors p-1">
@@ -157,40 +198,94 @@ function ChatPanel({ reportId, onClose }: { reportId: string; onClose: () => voi
 // ─── Main Dashboard ───────────────────────────────────────────────────────────
 export function Dashboard() {
   const [searchParams] = useSearchParams();
-  const reportId = searchParams.get('report') || '';
+  const jobId = searchParams.get('job') || '';
+  const [reportId, setReportId] = useState(searchParams.get('report') || '');
+  const navigate = useNavigate();
 
-  const [reportData, setReportData] = useState<any>(null);
-  const [loading, setLoading] = useState(false);
-  const [charts, setCharts] = useState<ChartItem[]>([]);
   const [chatOpen, setChatOpen] = useState(false);
 
+  const {
+    currentReportData: reportData,
+    currentReportCharts: charts,
+    isReportLoading: loading,
+    loadReport,
+    jobStatus,
+    setJobStatus,
+    agentProgress,
+    setAgentProgress,
+    auditScore,
+    setAuditScore,
+    jobError,
+    setJobError,
+  } = useAnalysisStore();
+
+  const workflow = reportData?.report?._meta?.agentWorkflow;
+
+  // Poll job status when coming from Upload
   useEffect(() => {
-    if (!reportId) return;
-    setLoading(true);
-    setReportData(null);
-    setCharts([]);
-    fetch(`http://localhost:8000/api/reports/${reportId}`)
-      .then(r => r.json())
-      .then(data => {
-        setReportData(data);
-        return fetch(`http://localhost:8000/api/charts/${reportId}`);
-      })
-      .then(r => r.json())
-      .then(data => {
-        setCharts(data.charts || []);
-        setLoading(false);
-        // Auto-open chat after report loads
+    if (!jobId) return;
+
+    let active = true;
+    let delay = 3000;
+
+    const poll = async () => {
+      if (!active) return;
+      try {
+        const res = await fetch(`${API_URL}/api/jobs/${jobId}/status`, { headers: apiHeaders() });
+        const data = await res.json();
+
+        if (!active) return;
+
+        if (data.error || data.status === 'Failed') {
+          setJobError(data.error || 'Analysis failed.');
+          return;
+        }
+
+        setJobStatus(data);
+        if (Array.isArray(data.agent_progress)) setAgentProgress(data.agent_progress);
+        if (typeof data.audit_score === 'number') setAuditScore(data.audit_score);
+
+        if (data.step === 4 && data.status === 'Complete') {
+          setReportId(data.report_id);
+          setJobStatus(null);
+          loadReport(data.report_id).then(() => {
+            setChatOpen(true);
+          });
+          return;
+        }
+
+        delay = Math.min(delay * 1.5, 15000);
+        setTimeout(poll, delay);
+      } catch {
+        if (active) {
+          setJobError('Connection lost.');
+        }
+      }
+    };
+
+    const timerId = setTimeout(poll, delay);
+
+    return () => {
+      active = false;
+      clearTimeout(timerId);
+    };
+  }, [jobId, loadReport, setAgentProgress, setAuditScore, setJobError, setJobStatus]);
+
+  useEffect(() => {
+    if (reportId && !jobId) {
+      loadReport(reportId).then(() => {
         setChatOpen(true);
-      })
-      .catch(() => setLoading(false));
-  }, [reportId]);
+      });
+    }
+  }, [reportId, jobId, loadReport]);
 
   return (
-    <div className="flex w-full h-[calc(100vh-56px)] overflow-hidden bg-bg">
+    <div className="flex flex-col w-full h-[calc(100vh-56px)] overflow-hidden bg-bg">
 
       {/* ── MAIN CONTENT ──────────────────────────────────────────────────── */}
-      <main className="flex-1 flex flex-col overflow-y-auto relative">
-        <div className="flex-1 p-8 pb-24 max-w-5xl mx-auto w-full">
+      <div className="flex flex-1 overflow-hidden">
+        <main className="flex-1 flex flex-col overflow-y-auto relative">
+          <div className="flex-1 p-8 pb-8 max-w-5xl mx-auto w-full">
 
           {/* Page Header */}
           <div className="flex justify-between items-start mb-8">
@@ -227,7 +322,154 @@ export function Dashboard() {
             )}
           </div>
 
+          {/* ── Live Progress Panel (when job is running) ──────────────────── */}
+          {jobStatus && !reportData && (
+            <section className="mb-8 bg-surface border border-border rounded-2xl overflow-hidden shadow-sm">
+              {/* Header */}
+              <div className="p-5 border-b border-border flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  {jobStatus.status === 'Complete' ? (
+                    <CheckCircle2 className="w-5 h-5 text-success" />
+                  ) : jobStatus.error ? (
+                    <AlertTriangle className="w-5 h-5 text-error" />
+                  ) : (
+                    <Loader2 className="w-5 h-5 text-accent animate-spin" />
+                  )}
+                  <div>
+                    <h2 className="font-body font-semibold text-[15px] text-fg">
+                      {jobStatus.status || 'Analyzing...'}
+                    </h2>
+                    {jobStatus.rows && jobStatus.columns && (
+                      <p className="font-body text-[12px] text-fg/50 mt-0.5">
+                        {jobStatus.rows.toLocaleString()} rows · {jobStatus.columns} columns
+                      </p>
+                    )}
+                  </div>
+                </div>
+                <div className="flex items-center gap-3">
+                  {auditScore !== null && (
+                    <Badge variant={auditScore >= 85 ? 'success' : 'warning'}>
+                      Audit {auditScore}/100
+                    </Badge>
+                  )}
+                  {jobStatus.regeneration_round !== undefined && jobStatus.regeneration_round > 0 && (
+                    <span className="font-body text-[11px] text-fg/50 flex items-center gap-1.5">
+                      <RefreshCw className="w-3.5 h-3.5" />
+                      Retry {jobStatus.regeneration_round}/3
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              {/* Agent Progress List */}
+              {agentProgress.length > 0 && (
+                <div className="px-5 py-3 border-b border-border bg-bg/30">
+                  {agentProgress.map((agent) => (
+                    <div key={agent.id} className="py-3 border-b border-border/50 last:border-0 flex gap-3">
+                      <div className="mt-0.5 flex-shrink-0">
+                        {agent.status === 'running' ? (
+                          agent.round > 0 ? <RefreshCw className="w-4 h-4 text-warning animate-spin" /> : <Loader2 className="w-4 h-4 text-accent animate-spin" />
+                        ) : agent.id === 'audit' ? (
+                          <ShieldCheck className="w-4 h-4 text-success" />
+                        ) : (
+                          <CheckCircle2 className="w-4 h-4 text-success" />
+                        )}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center justify-between gap-3">
+                          <h4 className="font-body font-medium text-[13px] text-fg">{agent.name}</h4>
+                          <span className="font-body text-[10px] text-fg/50 flex-shrink-0">
+                            {agent.score !== undefined ? `${agent.score}/100` : agent.round > 0 ? `Retry ${agent.round}/3` : agent.status}
+                          </span>
+                        </div>
+                        <p className="font-body text-[11px] text-fg/60 mt-1 leading-relaxed">{agent.detail}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Error state */}
+              {jobError && (
+                <div className="p-5 bg-error/5 border-t border-error/20">
+                  <div className="flex items-center gap-2 text-error">
+                    <AlertTriangle className="w-4 h-4" />
+                    <p className="font-body text-[13px]">{jobError}</p>
+                  </div>
+                </div>
+              )}
+
+              {/* Step indicators */}
+              <div className="px-5 py-4">
+                {[
+                  { step: 1, label: 'Mapping Schema', desc: 'Ingesting data and analyzing structures...' },
+                  { step: 2, label: 'Detecting Patterns', desc: 'Running agent workflow...' },
+                  { step: 3, label: 'Preparing Visuals', desc: 'Building charts and insights...' },
+                  { step: 4, label: 'Complete', desc: 'Report ready' },
+                ].map(({ step, label, desc }) => (
+                  <div key={step} className="py-3 border-b border-border/50 last:border-0 flex gap-4">
+                    <div className="mt-0.5">
+                      {(jobStatus?.step || 0) < step ? (
+                        <Clock className="w-4 h-4 text-fg/20" />
+                      ) : (jobStatus?.step || 0) === step && !jobStatus?.error ? (
+                        <Loader2 className="w-4 h-4 text-accent animate-spin" />
+                      ) : (
+                        <CheckCircle2 className="w-4 h-4 text-success" />
+                      )}
+                    </div>
+                    <div className="flex-1">
+                      <h4 className={`font-body font-medium text-[13px] ${(jobStatus?.step || 0) < step ? 'text-fg/40' : 'text-fg'}`}>
+                        {label}
+                      </h4>
+                      <p className={`font-body text-[11px] ${(jobStatus?.step || 0) < step ? 'text-fg/25' : 'text-fg/55'}`}>
+                        {(jobStatus?.step || 0) >= step ? desc : 'Waiting...'}
+                      </p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
+
           {/* ── Content ─────────────────────────────────────────────────── */}
+          {workflow && (
+            <section className="mb-8 py-5 border-y border-border">
+              <div className="flex flex-wrap items-center justify-between gap-4 mb-4">
+                <div className="flex items-center gap-3">
+                  <ShieldCheck className={`w-5 h-5 ${workflow.approved ? 'text-success' : 'text-warning'}`} />
+                  <div>
+                    <h2 className="font-body font-semibold text-[14px] text-fg">Agent Quality Audit</h2>
+                    <p className="font-body text-[11px] text-fg/55 mt-0.5">{workflow.auditSummary}</p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-3">
+                  {(workflow.regenerationRounds ?? 0) > 0 && (
+                    <span className="font-body text-[11px] text-fg/55 flex items-center gap-1.5">
+                      <RefreshCw className="w-3.5 h-3.5" />
+                      {workflow.regenerationRounds} of {workflow.maxRegenerationRounds} retries
+                    </span>
+                  )}
+                  <Badge variant={workflow.approved ? 'success' : 'warning'}>
+                    {workflow.auditScore}/100
+                  </Badge>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 md:grid-cols-5 gap-x-5 gap-y-3">
+                {workflow.stages?.map((stage: any) => (
+                  <div key={stage.id} className="flex items-start gap-2 min-w-0">
+                    <CheckCircle2 className="w-3.5 h-3.5 text-success mt-0.5 flex-shrink-0" />
+                    <div className="min-w-0">
+                      <p className="font-body text-[11px] font-medium text-fg truncate">{stage.name}</p>
+                      <p className="font-body text-[10px] text-fg/45 mt-0.5">
+                        {stage.id === 'audit' && stage.score !== undefined ? `Score ${stage.score}` : stage.round > 0 ? `Corrected in round ${stage.round}` : 'Completed'}
+                      </p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
+
           {loading ? (
             <div className="flex flex-col items-center justify-center py-20 gap-4">
               <Loader2 className="w-8 h-8 animate-spin text-accent" />
@@ -274,14 +516,14 @@ export function Dashboard() {
               )}
 
               {/* Key Findings */}
-              {reportData?.report?.keyFindings?.length > 0 && (
+              {((reportData?.report?.keyFindings?.length) ?? 0) > 0 && (
                 <div className="bg-surface border border-border rounded-xl p-6 shadow-sm">
                   <div className="flex items-center gap-2 mb-4">
                     <Sparkles className="w-4 h-4 text-accent" />
                     <span className="font-body text-[10px] text-accent uppercase tracking-widest font-semibold">Key Findings</span>
                   </div>
                   <div className="space-y-4">
-                    {reportData.report.keyFindings.map((f: any, i: number) => (
+                    {(reportData?.report?.keyFindings || []).map((f: any, i: number) => (
                       <div key={i} className="flex gap-4 items-start p-4 bg-bg rounded-lg border border-border/50">
                         <div className="flex-shrink-0 w-7 h-7 rounded-full bg-accent/10 flex items-center justify-center">
                           <span className="font-body text-[11px] font-bold text-accent">{i + 1}</span>
@@ -307,7 +549,7 @@ export function Dashboard() {
               )}
 
               {/* Anomalies */}
-              {reportData?.report?.anomalies?.length > 0 && (
+              {((reportData?.report?.anomalies?.length) ?? 0) > 0 && (
                 <div className="bg-surface border border-border rounded-xl p-6 shadow-sm">
                   <div className="flex items-center gap-2 mb-4">
                     <AlertTriangle className="w-4 h-4 text-amber-500" />
@@ -323,7 +565,7 @@ export function Dashboard() {
                         </tr>
                       </thead>
                       <tbody>
-                        {reportData.report.anomalies.map((a: any, i: number) => (
+                        {(reportData?.report?.anomalies || []).map((a: any, i: number) => (
                           <tr key={i} className="border-b border-border/40 last:border-0">
                             <td className="py-3 pr-4 font-medium text-fg">{a.column}</td>
                             <td className="py-3 pr-4">
@@ -343,14 +585,14 @@ export function Dashboard() {
               )}
 
               {/* Recommendations */}
-              {reportData?.report?.recommendations?.length > 0 && (
+              {((reportData?.report?.recommendations?.length) ?? 0) > 0 && (
                 <div className="bg-surface border border-border rounded-xl p-6 shadow-sm">
                   <div className="flex items-center gap-2 mb-4">
                     <Target className="w-4 h-4 text-accent" />
                     <span className="font-body text-[10px] text-accent uppercase tracking-widest font-semibold">Strategic Recommendations</span>
                   </div>
                   <div className="flex flex-col divide-y divide-border/50">
-                    {reportData.report.recommendations.map((rec: any, i: number) => (
+                    {(reportData?.report?.recommendations || []).map((rec: any, i: number) => (
                       <div key={i} className="flex gap-4 py-4 items-start">
                         <div className="w-7 h-7 rounded-full bg-accent/10 flex items-center justify-center flex-shrink-0">
                           <span className="font-body text-[11px] font-bold text-accent">{i + 1}</span>
@@ -383,33 +625,16 @@ export function Dashboard() {
                 Open the <strong>Library</strong> and click "Open on Dashboard" to view charts and insights — or upload a new dataset.
               </p>
               <div className="flex gap-3">
-                <Button variant="outlined" onClick={() => window.location.href = '/library'}>
+                <Button variant="outlined" onClick={() => navigate('/library')}>
                   Open Library
                 </Button>
-                <Button variant="primary" onClick={() => window.location.href = '/upload'}>
+                <Button variant="primary" onClick={() => navigate('/upload')}>
                   Upload Dataset
                 </Button>
               </div>
             </div>
           )}
         </div>
-
-        {/* Sticky bottom bar */}
-        {reportId && (
-          <div className="sticky bottom-0 w-full bg-bg/90 backdrop-blur-sm border-t border-border p-4 flex justify-between items-center z-20">
-            <div className="flex items-center gap-2 font-body text-[12px] text-fg/50">
-              <Sparkles className="w-3.5 h-3.5" />
-              <span>Click "Ask AI" to chat about this report and refine it with prompts</span>
-            </div>
-            <Button
-              size="lg"
-              className="shadow-custom-md"
-              onClick={() => window.open(`http://localhost:8000/api/export/${reportId}/pdf`, '_blank')}
-            >
-              <span className="mr-2">🗎</span> Generate Full Report
-            </Button>
-          </div>
-        )}
       </main>
 
       {/* ── AI CHAT PANEL ─────────────────────────────────────────────────── */}
@@ -427,6 +652,33 @@ export function Dashboard() {
           </motion.aside>
         )}
       </AnimatePresence>
+      </div>
+
+      {/* ── Sticky bottom export bar ─────────────────────────────────────────── */}
+      {reportId && (
+        <div className="flex-shrink-0 w-full bg-surface border-t border-border px-6 py-3 flex justify-between items-center z-30">
+          <div className="flex items-center gap-2 font-body text-[12px] text-fg/50">
+            <Sparkles className="w-3.5 h-3.5" />
+            <span>Click "Ask AI" to chat about this report and refine it with prompts</span>
+          </div>
+          <div className="flex items-center gap-3">
+            <Button
+              variant="outlined"
+              size="sm"
+              onClick={() => window.open(`${API_URL}/api/export/${reportId}`, '_blank')}
+            >
+              Download PDF
+            </Button>
+            <Button
+              size="sm"
+              className="shadow-custom-md"
+              onClick={() => window.open(`${API_URL}/api/export/${reportId}/pdf`, '_blank')}
+            >
+              Generate Full Report
+            </Button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

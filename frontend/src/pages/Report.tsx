@@ -1,37 +1,14 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
-  Download, Share, Settings, AlertTriangle, Target,
-  X, Loader2, ChevronRight, BarChart2
+  Download, Settings, AlertTriangle, Target,
+  X, Loader2, ChevronRight, BarChart2, BookOpen
 } from 'lucide-react';
 import { Link, useParams } from 'react-router-dom';
 import { Button } from '../components/ui/Button';
-
-// ── Types ─────────────────────────────────────────────────────────────────────
-interface ChartItem {
-  title: string;
-  interpretation: string;
-  image: string;
-}
-
-interface ReportData {
-  id: string;
-  filename: string;
-  created_at?: string;
-  report: {
-    domain?: string;
-    executiveSummary?: string;
-    keyFindings?: { title?: string; finding?: string; detail?: string; description?: string; confidenceScore?: number }[];
-    anomalies?: { column?: string; severity?: string; description?: string; businessImpact?: string }[];
-    recommendations?: { action?: string; rationale?: string; priority?: string }[];
-  };
-  stats?: {
-    shape?: { rows: number; columns: number };
-    numeric_summary?: Record<string, { mean: number; std: number; min: number; max: number }>;
-    missing_values?: Record<string, number>;
-    statistical_anomalies?: { column: string; outlier_count: number; mean: number }[];
-  };
-}
+import { API_URL, apiHeaders } from '../lib/api';
+import { useAnalysisStore } from '../store/useAnalysisStore';
+import type { ReportData } from '../store/useAnalysisStore';
 
 // ── Severity badge ────────────────────────────────────────────────────────────
 const SevBadge = ({ sev }: { sev?: string }) => {
@@ -44,11 +21,19 @@ const SevBadge = ({ sev }: { sev?: string }) => {
 export function Report() {
   const { id } = useParams<{ id: string }>();
 
-  const [reportData, setReportData] = useState<ReportData | null>(null);
-  const [charts, setCharts] = useState<ChartItem[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [chartsLoading, setChartsLoading] = useState(false);
-  const [error, setError] = useState('');
+  const {
+    currentReportData: reportData,
+    currentReportCharts: charts,
+    isReportLoading: loading,
+    isChartsLoading: chartsLoading,
+    reportError: error,
+    loadReport,
+    updateReportData,
+  } = useAnalysisStore();
+
+  const [isEditing, setIsEditing] = useState(false);
+  const [editedReport, setEditedReport] = useState<ReportData['report'] | null>(null);
+  const [saving, setSaving] = useState(false);
 
   // Customization state
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -67,33 +52,62 @@ export function Report() {
     recommendations: true,
   });
 
-  // Fetch report data
-  useEffect(() => {
-    if (!id) return;
-    setLoading(true);
-    fetch(`http://localhost:8000/api/reports/${id}`)
+  const handleStartEdit = () => {
+    if (!reportData) return;
+    setEditedReport(JSON.parse(JSON.stringify(reportData.report)));
+    setIsEditing(true);
+  };
+
+  const handleSave = () => {
+    if (!id || !editedReport) return;
+    setSaving(true);
+    fetch(`${API_URL}/api/reports/${id}`, {
+      method: 'PUT',
+      headers: apiHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ report: editedReport }),
+    })
       .then(r => {
-        if (!r.ok) throw new Error('Report not found');
+        if (!r.ok) throw new Error('Failed to save changes');
         return r.json();
       })
       .then(data => {
-        setReportData(data);
-        setLoading(false);
-        // Now fetch charts
-        setChartsLoading(true);
-        return fetch(`http://localhost:8000/api/charts/${id}`);
-      })
-      .then(r => r.json())
-      .then(data => {
-        setCharts(data.charts || []);
-        setChartsLoading(false);
+        updateReportData(data);
+        setIsEditing(false);
+        setSaving(false);
       })
       .catch(err => {
-        setError(err.message || 'Failed to load report');
-        setLoading(false);
-        setChartsLoading(false);
+        alert(err.message || 'Failed to save changes');
+        setSaving(false);
       });
-  }, [id]);
+  };
+
+  const handleFindingChange = (index: number, field: string, value: any) => {
+    if (!editedReport) return;
+    const newFindings = [...(editedReport.keyFindings || [])];
+    newFindings[index] = { ...newFindings[index], [field]: value };
+    setEditedReport({ ...editedReport, keyFindings: newFindings });
+  };
+
+  const handleAnomalyChange = (index: number, field: string, value: any) => {
+    if (!editedReport) return;
+    const newAnomalies = [...(editedReport.anomalies || [])];
+    newAnomalies[index] = { ...newAnomalies[index], [field]: value };
+    setEditedReport({ ...editedReport, anomalies: newAnomalies });
+  };
+
+  const handleRecChange = (index: number, field: string, value: any) => {
+    if (!editedReport) return;
+    const newRecs = [...(editedReport.recommendations || [])];
+    newRecs[index] = { ...newRecs[index], [field]: value };
+    setEditedReport({ ...editedReport, recommendations: newRecs });
+  };
+
+  // Fetch report data
+  useEffect(() => {
+    if (id) {
+      loadReport(id);
+    }
+  }, [id, loadReport]);
 
   if (loading) return (
     <div className="flex items-center justify-center min-h-screen">
@@ -109,12 +123,12 @@ export function Report() {
   );
 
   const ai = reportData.report || {};
-  const stats = reportData.stats || {};
-  const shape = stats.shape || {};
+  const stats = reportData.stats;
+  const shape = stats?.shape;
   const findings = ai.keyFindings || [];
   const anomalies = ai.anomalies || [];
   const recs = ai.recommendations || [];
-  const statAnomalies = stats.statistical_anomalies || [];
+  const statAnomalies = stats?.statistical_anomalies || [];
 
   return (
     <div className="w-full bg-[#FAFAFA] min-h-full py-12 px-6 font-body" style={{ color: fontColor }}>
@@ -135,22 +149,45 @@ export function Report() {
               <p className="text-[13px] mt-1 font-medium" style={{ color: accentColor }}>{ai.domain}</p>
             )}
             <p className="text-[12px] text-fg/50 mt-1">
-              {shape.rows?.toLocaleString() || '—'} rows × {shape.columns || '—'} columns
+              {shape?.rows?.toLocaleString() || '—'} rows × {shape?.columns || '—'} columns
               {reportData.created_at ? ` · ${reportData.created_at}` : ''}
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-3">
-            <Button variant="ghost" className="gap-2 text-fg/70">
-              <Share className="w-4 h-4" /> Share
-            </Button>
-            <Button variant="outlined" className="gap-2" onClick={() => setIsModalOpen(true)}>
-              <Settings className="w-4 h-4" /> Customize
-            </Button>
-            <a href={`http://localhost:8000/api/export/${id}`} target="_blank" rel="noreferrer">
-              <Button variant="primary" className="gap-2" style={{ backgroundColor: accentColor }}>
-                <Download className="w-4 h-4" /> Download PDF
-              </Button>
-            </a>
+            {isEditing ? (
+              <>
+                <Button variant="outlined" disabled={saving} className="gap-2 text-red-600 border-red-200 hover:bg-red-50" onClick={() => setIsEditing(false)}>
+                  Cancel
+                </Button>
+                <Button variant="primary" disabled={saving} className="gap-2" style={{ backgroundColor: accentColor }} onClick={handleSave}>
+                  {saving ? 'Saving...' : 'Save Changes'}
+                </Button>
+              </>
+            ) : (
+              <>
+                <Button variant="outlined" className="gap-2" onClick={handleStartEdit}>
+                  Edit Report
+                </Button>
+                <Button variant="outlined" className="gap-2" onClick={() => setIsModalOpen(true)}>
+                  <Settings className="w-4 h-4" /> Customize
+                </Button>
+                <a href={`${API_URL}/api/export/${id}`} target="_blank" rel="noreferrer">
+                  <Button variant="primary" className="gap-2" style={{ backgroundColor: accentColor }}>
+                    <Download className="w-4 h-4" /> Download PDF
+                  </Button>
+                </a>
+                <a href={`${API_URL}/api/export/${id}/docx`} target="_blank" rel="noreferrer">
+                  <Button variant="outlined" className="gap-2 border-accent text-accent hover:bg-accent/5">
+                    <Download className="w-4 h-4" /> Download DOCX
+                  </Button>
+                </a>
+                <a href={`${API_URL}/api/export/${id}/notebook`} target="_blank" rel="noreferrer">
+                  <Button variant="outlined" className="gap-2 border-emerald-600 text-emerald-700 hover:bg-emerald-50">
+                    <BookOpen className="w-4 h-4" /> Download Notebook
+                  </Button>
+                </a>
+              </>
+            )}
           </div>
         </div>
       </div>
@@ -159,16 +196,24 @@ export function Report() {
       <div className="max-w-[900px] mx-auto space-y-16">
 
         {/* 1. Executive Summary */}
-        {sections.executiveSummary && ai.executiveSummary && (
+        {sections.executiveSummary && (
           <section>
             <h2 className="font-heading text-[28px] font-semibold mb-5">Executive Summary</h2>
-            <p className="text-[14px] leading-[1.8] opacity-90">{ai.executiveSummary}</p>
+            {isEditing ? (
+              <textarea
+                className="w-full min-h-[150px] p-4 border border-border rounded-lg bg-white text-[14px] leading-[1.7] focus:outline-none focus:ring-2 focus:ring-accent/50"
+                value={editedReport?.executiveSummary || ''}
+                onChange={e => setEditedReport(prev => prev ? { ...prev, executiveSummary: e.target.value } : null)}
+              />
+            ) : (
+              ai.executiveSummary && <p className="text-[14px] leading-[1.8] opacity-90">{ai.executiveSummary}</p>
+            )}
             <div className="mt-6 p-5 bg-surface rounded-r-lg" style={{ borderLeft: `4px solid ${accentColor}` }}>
               <div className="text-[11px] font-bold uppercase tracking-widest mb-1" style={{ color: accentColor }}>
                 Dataset at a glance
               </div>
               <p className="text-[13px] opacity-80">
-                {shape.rows?.toLocaleString()} rows · {shape.columns} columns analyzed
+                {shape?.rows?.toLocaleString()} rows · {shape?.columns} columns analyzed
                 {ai.domain ? ` · Domain: ${ai.domain}` : ''}
               </p>
             </div>
@@ -220,25 +265,58 @@ export function Report() {
         )}
 
         {/* 3. Key Findings */}
-        {sections.keyFindings && findings.length > 0 && (
+        {sections.keyFindings && (isEditing ? (editedReport?.keyFindings || []) : findings).length > 0 && (
           <section>
             <h2 className="font-heading text-[28px] font-semibold mb-6">Key Findings</h2>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              {findings.map((f, i) => {
+              {(isEditing ? (editedReport?.keyFindings || []) : findings).map((f, i) => {
                 const title = f.title || f.finding || `Finding ${i + 1}`;
                 const detail = f.detail || f.description || '';
                 const conf = f.confidenceScore;
                 return (
-                  <div key={i} className="bg-surface rounded-[12px] p-6 shadow-sm border border-border/50">
-                    <div className="flex items-start justify-between mb-3 gap-2">
-                      <h3 className="font-heading text-[18px] font-medium leading-snug">{title}</h3>
-                      {conf && (
-                        <span className="text-[11px] font-bold shrink-0 px-2 py-1 rounded-full bg-accent/10 text-accent">
-                          {conf}%
-                        </span>
-                      )}
-                    </div>
-                    {detail && <p className="text-[13px] leading-relaxed opacity-80">{detail}</p>}
+                  <div key={i} className="bg-surface rounded-[12px] p-6 shadow-sm border border-border/50 flex flex-col justify-between">
+                    {isEditing ? (
+                      <div className="space-y-3 w-full">
+                        <div>
+                          <label className="text-[11px] font-bold uppercase tracking-wider text-fg/40 mb-1 block">Title</label>
+                          <input
+                            type="text"
+                            className="w-full p-2 border border-border rounded bg-white text-[13px] focus:outline-none focus:ring-2 focus:ring-accent/50"
+                            value={title}
+                            onChange={e => handleFindingChange(i, f.title !== undefined ? 'title' : 'finding', e.target.value)}
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[11px] font-bold uppercase tracking-wider text-fg/40 mb-1 block">Detail</label>
+                          <textarea
+                            className="w-full p-2 border border-border rounded bg-white text-[13px] min-h-[80px] focus:outline-none focus:ring-2 focus:ring-accent/50"
+                            value={detail}
+                            onChange={e => handleFindingChange(i, f.detail !== undefined ? 'detail' : 'description', e.target.value)}
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[11px] font-bold uppercase tracking-wider text-fg/40 mb-1 block">AI Confidence (%)</label>
+                          <input
+                            type="number"
+                            className="w-full p-2 border border-border rounded bg-white text-[13px] focus:outline-none focus:ring-2 focus:ring-accent/50"
+                            value={conf || 0}
+                            onChange={e => handleFindingChange(i, 'confidenceScore', parseInt(e.target.value) || 0)}
+                          />
+                        </div>
+                      </div>
+                    ) : (
+                      <>
+                        <div className="flex items-start justify-between mb-3 gap-2">
+                          <h3 className="font-heading text-[18px] font-medium leading-snug">{title}</h3>
+                          {conf && (
+                            <span className="text-[11px] font-bold shrink-0 px-2 py-1 rounded-full bg-accent/10 text-accent">
+                              {conf}%
+                            </span>
+                          )}
+                        </div>
+                        {detail && <p className="text-[13px] leading-relaxed opacity-80">{detail}</p>}
+                      </>
+                    )}
                   </div>
                 );
               })}
@@ -277,20 +355,57 @@ export function Report() {
 
             {/* AI narrative anomalies */}
             <div className="space-y-5">
-              {anomalies.map((a, i) => (
+              {(isEditing ? (editedReport?.anomalies || []) : anomalies).map((a, i) => (
                 <div key={i} className="pb-5 border-b border-border/50">
-                  <div className="flex items-center gap-3 mb-2">
-                    <AlertTriangle className="w-5 h-5 text-amber-500 shrink-0" />
-                    <h4 className="font-body text-[14px] font-bold">{a.column || 'Unknown'}</h4>
-                    <SevBadge sev={a.severity} />
-                  </div>
-                  {a.description && (
-                    <p className="text-[13px] leading-relaxed opacity-80 ml-8">{a.description}</p>
-                  )}
-                  {a.businessImpact && (
-                    <p className="text-[12px] mt-1 ml-8 font-medium" style={{ color: accentColor }}>
-                      Impact: {a.businessImpact}
-                    </p>
+                  {isEditing ? (
+                    <div className="space-y-3 p-4 bg-surface rounded-lg border border-border/50 ml-8">
+                      <div className="flex items-center gap-3">
+                        <AlertTriangle className="w-5 h-5 text-amber-500 shrink-0" />
+                        <span className="text-[13px] font-bold">Column: {a.column || 'Unknown'}</span>
+                        <select
+                          className="p-1 border border-border rounded bg-white text-[12px] focus:outline-none focus:ring-2 focus:ring-accent/50"
+                          value={a.severity || 'medium'}
+                          onChange={e => handleAnomalyChange(i, 'severity', e.target.value)}
+                        >
+                          <option value="low">LOW</option>
+                          <option value="medium">MEDIUM</option>
+                          <option value="high">HIGH</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="text-[11px] font-bold uppercase tracking-wider text-fg/40 mb-1 block">Description</label>
+                        <textarea
+                          className="w-full p-2 border border-border rounded bg-white text-[13px] focus:outline-none focus:ring-2 focus:ring-accent/50"
+                          value={a.description || ''}
+                          onChange={e => handleAnomalyChange(i, 'description', e.target.value)}
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[11px] font-bold uppercase tracking-wider text-fg/40 mb-1 block">Business Impact</label>
+                        <input
+                          type="text"
+                          className="w-full p-2 border border-border rounded bg-white text-[13px] focus:outline-none focus:ring-2 focus:ring-accent/50"
+                          value={a.businessImpact || ''}
+                          onChange={e => handleAnomalyChange(i, 'businessImpact', e.target.value)}
+                        />
+                      </div>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="flex items-center gap-3 mb-2">
+                        <AlertTriangle className="w-5 h-5 text-amber-500 shrink-0" />
+                        <h4 className="font-body text-[14px] font-bold">{a.column || 'Unknown'}</h4>
+                        <SevBadge sev={a.severity} />
+                      </div>
+                      {a.description && (
+                        <p className="text-[13px] leading-relaxed opacity-80 ml-8">{a.description}</p>
+                      )}
+                      {a.businessImpact && (
+                        <p className="text-[12px] mt-1 ml-8 font-medium" style={{ color: accentColor }}>
+                          Impact: {a.businessImpact}
+                        </p>
+                      )}
+                    </>
                   )}
                 </div>
               ))}
@@ -299,7 +414,7 @@ export function Report() {
         )}
 
         {/* 5. Recommendations */}
-        {sections.recommendations && recs.length > 0 && (
+        {sections.recommendations && (isEditing ? (editedReport?.recommendations || []) : recs).length > 0 && (
           <section>
             <h2 className="font-heading text-[28px] font-semibold mb-6">Recommendations</h2>
             <div className="bg-surface rounded-[12px] p-8 border border-border/50">
@@ -307,23 +422,61 @@ export function Report() {
                 <Target className="w-6 h-6" style={{ color: accentColor }} />
                 <h3 className="font-heading text-[20px] font-medium">Action Items</h3>
               </div>
-              <ol className="list-decimal list-outside ml-5 space-y-6 text-[14px] leading-[1.7] opacity-90">
-                {recs.map((rec, i) => {
-                  const priority = (rec.priority || 'Medium').toUpperCase();
-                  const pColor = priority === 'HIGH' ? '#DC2626' : priority === 'LOW' ? '#16A34A' : '#D97706';
-                  return (
-                    <li key={i} className="pl-2">
-                      <div className="flex items-center gap-2 mb-1">
-                        <strong className="font-semibold" style={{ color: fontColor }}>{rec.action}</strong>
-                        <span className="text-[10px] font-bold px-1.5 py-0.5 rounded" style={{ backgroundColor: `${pColor}20`, color: pColor }}>
-                          {priority}
-                        </span>
+              {isEditing ? (
+                <div className="space-y-6">
+                  {(editedReport?.recommendations || []).map((rec, i) => (
+                    <div key={i} className="p-4 bg-bg rounded-lg border border-border/50 space-y-3">
+                      <div className="flex flex-wrap items-center gap-3">
+                        <span className="text-[13px] font-bold">Item {i + 1}</span>
+                        <select
+                          className="p-1 border border-border rounded bg-white text-[12px] focus:outline-none focus:ring-2 focus:ring-accent/50"
+                          value={rec.priority || 'Medium'}
+                          onChange={e => handleRecChange(i, 'priority', e.target.value)}
+                        >
+                          <option value="Low">LOW</option>
+                          <option value="Medium">MEDIUM</option>
+                          <option value="High">HIGH</option>
+                        </select>
                       </div>
-                      {rec.rationale && <p className="opacity-70 text-[13px]">{rec.rationale}</p>}
-                    </li>
-                  );
-                })}
-              </ol>
+                      <div>
+                        <label className="text-[11px] font-bold uppercase tracking-wider text-fg/40 mb-1 block">Action</label>
+                        <input
+                          type="text"
+                          className="w-full p-2 border border-border rounded bg-white text-[13px] focus:outline-none focus:ring-2 focus:ring-accent/50"
+                          value={rec.action || ''}
+                          onChange={e => handleRecChange(i, 'action', e.target.value)}
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[11px] font-bold uppercase tracking-wider text-fg/40 mb-1 block">Rationale</label>
+                        <textarea
+                          className="w-full p-2 border border-border rounded bg-white text-[13px] focus:outline-none focus:ring-2 focus:ring-accent/50"
+                          value={rec.rationale || ''}
+                          onChange={e => handleRecChange(i, 'rationale', e.target.value)}
+                        />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <ol className="list-decimal list-outside ml-5 space-y-6 text-[14px] leading-[1.7] opacity-90">
+                  {recs.map((rec, i) => {
+                    const priority = (rec.priority || 'Medium').toUpperCase();
+                    const pColor = priority === 'HIGH' ? '#DC2626' : priority === 'LOW' ? '#16A34A' : '#D97706';
+                    return (
+                      <li key={i} className="pl-2">
+                        <div className="flex items-center gap-2 mb-1">
+                          <strong className="font-semibold" style={{ color: fontColor }}>{rec.action}</strong>
+                          <span className="text-[10px] font-bold px-1.5 py-0.5 rounded" style={{ backgroundColor: `${pColor}20`, color: pColor }}>
+                            {priority}
+                          </span>
+                        </div>
+                        {rec.rationale && <p className="opacity-70 text-[13px]">{rec.rationale}</p>}
+                      </li>
+                    );
+                  })}
+                </ol>
+              )}
             </div>
           </section>
         )}
@@ -432,7 +585,7 @@ export function Report() {
                 {activeTab === 'export' && (
                   <div className="space-y-4">
                     <p className="text-[13px] text-fg/60">The PDF is generated server-side using your uploaded data. Click below to download it.</p>
-                    <a href={`http://localhost:8000/api/export/${id}`} target="_blank" rel="noreferrer" className="block">
+                    <a href={`${API_URL}/api/export/${id}`} target="_blank" rel="noreferrer" className="block">
                       <Button variant="primary" className="w-full justify-center gap-2" style={{ backgroundColor: accentColor }}>
                         <Download className="w-4 h-4" /> Download PDF Report
                       </Button>

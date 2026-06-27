@@ -1,6 +1,5 @@
-import React from 'react';
 import { motion } from 'framer-motion';
-import { Shield, CheckCircle, Database, Brain, BarChart } from 'lucide-react';
+import { Shield, Database, Brain, BarChart } from 'lucide-react';
 
 export function Methodology() {
   return (

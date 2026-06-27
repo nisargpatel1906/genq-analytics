@@ -1,36 +1,53 @@
 import React, { useState, useCallback, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { FileText, BarChart2, CheckCircle2, Loader2, Circle } from 'lucide-react';
+import { FileText, BarChart2, CheckCircle2, Loader2, Circle, RefreshCw, ShieldCheck } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { Button } from '../components/ui/Button';
 import { Badge } from '../components/ui/Badge';
-
-type JobStatus = 'idle' | 'uploading' | 'mapping' | 'analyzing' | 'visualizing' | 'complete' | 'error';
+import { API_URL, apiHeaders } from '../lib/api';
+import { useAnalysisStore } from '../store/useAnalysisStore';
 
 export function Upload() {
   const [isDragging, setIsDragging] = useState(false);
-  const [status, setStatus] = useState<JobStatus>('idle');
-  const [file, setFile] = useState<File | null>(null);
-  const [progress, setProgress] = useState(0);
   const navigate = useNavigate();
 
-  const [jobId, setJobId] = useState<string | null>(null);
-  const [backendStatus, setBackendStatus] = useState<string>('');
-  const [errorMessage, setErrorMessage] = useState<string>('');
-  const [dataMeta, setDataMeta] = useState<{rows: number, columns: number} | null>(null);
+  const {
+    status,
+    setStatus,
+    progress,
+    setProgress,
+    jobId,
+    setJobId,
+    backendStatus,
+    setBackendStatus,
+    errorMessage,
+    setErrorMessage,
+    dataMeta,
+    setDataMeta,
+    agentProgress,
+    setAgentProgress,
+    auditScore,
+    setAuditScore,
+    clearJobState,
+  } = useAnalysisStore();
 
   useEffect(() => {
     if (!jobId || status === 'error' || status === 'complete') return;
 
-    const interval = setInterval(async () => {
+    let active = true;
+    let delay = 3000;
+
+    const poll = async () => {
+      if (!active) return;
       try {
-        const res = await fetch(`http://localhost:8000/api/jobs/${jobId}/status`);
+        const res = await fetch(`${API_URL}/api/jobs/${jobId}/status`, { headers: apiHeaders() });
         const data = await res.json();
         
+        if (!active) return;
+
         if (data.error || data.status === 'Failed') {
             setStatus('error');
             setErrorMessage(data.error || 'An unknown error occurred during analysis.');
-            clearInterval(interval);
             return;
         }
 
@@ -41,23 +58,34 @@ export function Upload() {
         if (data.rows && data.columns) {
             setDataMeta({ rows: data.rows, columns: data.columns });
         }
+        if (Array.isArray(data.agent_progress)) setAgentProgress(data.agent_progress);
+        if (typeof data.audit_score === 'number') setAuditScore(data.audit_score);
 
         if (data.step === 1) setStatus('mapping');
         else if (data.step === 2) setStatus('analyzing');
         else if (data.step === 3) setStatus('visualizing');
         else if (data.step === 4 && data.status === 'Complete') {
             setStatus('complete');
-            clearInterval(interval);
-            setTimeout(() => navigate(`/dashboard?report=${data.report_id}`), 800);
+            setTimeout(() => navigate(`/dashboard?job=${jobId}`), 800);
+            return;
         }
-      } catch (e) {
-        setStatus('error');
-        clearInterval(interval);
-      }
-    }, 1000);
 
-    return () => clearInterval(interval);
-  }, [jobId, status, navigate]);
+        delay = Math.min(delay * 1.5, 15000);
+        setTimeout(poll, delay);
+      } catch (e) {
+        if (active) {
+          setStatus('error');
+        }
+      }
+    };
+
+    const timerId = setTimeout(poll, delay);
+
+    return () => {
+      active = false;
+      clearTimeout(timerId);
+    };
+  }, [jobId, status, navigate, setStatus, setErrorMessage, setBackendStatus, setDataMeta, setAgentProgress, setAuditScore]);
 
   useEffect(() => {
     if (status === 'analyzing') {
@@ -78,34 +106,20 @@ export function Upload() {
     setIsDragging(false);
   }, []);
 
-  const handleDrop = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    setIsDragging(false);
-    const droppedFile = e.dataTransfer.files[0];
-    if (droppedFile) {
-      startUpload(droppedFile);
-    }
-  }, []);
-
-  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const selectedFile = e.target.files?.[0];
-    if (selectedFile) {
-      startUpload(selectedFile);
-    }
-  };
-
-  const startUpload = async (selectedFile: File) => {
-    setFile(selectedFile);
+  const startUpload = useCallback(async (selectedFile: File) => {
     setStatus('uploading');
     setProgress(0);
     setJobId(null);
+    setAgentProgress([]);
+    setAuditScore(null);
     
     const formData = new FormData();
     formData.append('file', selectedFile);
 
     try {
-      const res = await fetch('http://localhost:8000/api/upload', {
+      const res = await fetch(`${API_URL}/api/upload`, {
         method: 'POST',
+        headers: apiHeaders(),
         body: formData,
       });
       const data = await res.json();
@@ -118,14 +132,44 @@ export function Upload() {
       setStatus('error');
       setErrorMessage(e.message || 'Failed to connect to the backend server.');
     }
+  }, [setStatus, setProgress, setJobId, setAgentProgress, setAuditScore, setErrorMessage]);
+
+  const isValidFile = useCallback((file: File) => {
+    const name = file.name.toLowerCase();
+    if (!name.endsWith('.csv') && !name.endsWith('.xlsx')) {
+      setStatus('error');
+      setErrorMessage('Invalid file type. Only CSV and Excel (.xlsx) files are supported.');
+      return false;
+    }
+    return true;
+  }, [setStatus, setErrorMessage]);
+
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(false);
+    const droppedFile = e.dataTransfer.files[0];
+    if (droppedFile) {
+      if (!isValidFile(droppedFile)) return;
+      startUpload(droppedFile);
+    }
+  }, [isValidFile, startUpload]);
+
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const selectedFile = e.target.files?.[0];
+    if (selectedFile) {
+      if (!isValidFile(selectedFile)) return;
+      startUpload(selectedFile);
+    }
   };
 
   const cancelAnalysis = () => {
-    setStatus('idle');
-    setFile(null);
-    setProgress(0);
-    setJobId(null);
-    setDataMeta(null);
+    if (jobId) {
+      fetch(`${API_URL}/api/jobs/${jobId}`, {
+        method: 'DELETE',
+        headers: apiHeaders(),
+      }).catch(err => console.error("Failed to cancel job on backend", err));
+    }
+    clearJobState();
   };
 
   return (
@@ -153,7 +197,7 @@ export function Upload() {
         >
           <input
             type="file"
-            accept=".csv,.tsv,.json,.xlsx"
+            accept=".csv,.xlsx"
             onChange={handleFileSelect}
             className="absolute inset-0 w-full h-full opacity-0 cursor-pointer disabled:cursor-not-allowed"
             disabled={status !== 'idle' && status !== 'error'}
@@ -197,8 +241,37 @@ export function Upload() {
                     {backendStatus || "AI is analyzing your data..."}
                   </span>
                 </div>
-                <Badge variant="warning">IN PROGRESS</Badge>
+                <Badge variant={auditScore !== null ? 'success' : 'warning'}>
+                  {auditScore !== null ? `AUDIT ${auditScore}` : 'IN PROGRESS'}
+                </Badge>
               </div>
+
+              {agentProgress.length > 0 && (
+                <div className="px-5 border-b border-border bg-bg/35">
+                  {agentProgress.map((agent) => (
+                    <div key={agent.id} className="py-3.5 border-b border-border/60 last:border-0 flex gap-3">
+                      <div className="mt-0.5 flex-shrink-0">
+                        {agent.status === 'running' ? (
+                          agent.round > 0 ? <RefreshCw className="w-4 h-4 text-warning animate-spin" /> : <Loader2 className="w-4 h-4 text-accent animate-spin" />
+                        ) : agent.id === 'audit' ? (
+                          <ShieldCheck className="w-4 h-4 text-success" />
+                        ) : (
+                          <CheckCircle2 className="w-4 h-4 text-success" />
+                        )}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center justify-between gap-3">
+                          <h4 className="font-body font-medium text-[13px] text-fg">{agent.name}</h4>
+                          <span className="font-body text-[10px] text-fg/50 flex-shrink-0">
+                            {agent.score !== undefined ? `${agent.score}/100` : agent.round > 0 ? `Retry ${agent.round}/3` : agent.status}
+                          </span>
+                        </div>
+                        <p className="font-body text-[11px] text-fg/60 mt-1 leading-relaxed">{agent.detail}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
 
               {/* Steps List */}
               <div className="px-5">

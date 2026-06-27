@@ -1,8 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { Search, FileSpreadsheet, FileText, Download, Trash2, ArrowRight, ArrowDown, Loader2 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { Button } from '../components/ui/Button';
 import { Badge } from '../components/ui/Badge';
+import { API_URL, apiHeaders } from '../lib/api';
 
 interface Report {
   id: string;
@@ -21,7 +22,7 @@ export function Library() {
 
   const fetchReports = () => {
     setLoading(true);
-    fetch('http://localhost:8000/api/reports')
+    fetch(`${API_URL}/api/reports`, { headers: apiHeaders() })
       .then(res => res.json())
       .then(data => {
         if (Array.isArray(data)) {
@@ -41,7 +42,7 @@ export function Library() {
   const handleDelete = async (reportId: string) => {
     if (!window.confirm('Delete this report permanently?')) return;
     try {
-      await fetch(`http://localhost:8000/api/reports/${reportId}`, { method: 'DELETE' });
+      await fetch(`${API_URL}/api/reports/${reportId}`, { method: 'DELETE', headers: apiHeaders() });
       setReports(prev => prev.filter(r => r.id !== reportId));
     } catch {
       alert('Failed to delete report.');
@@ -177,7 +178,7 @@ export function Library() {
                   </div>
                   <div className="flex gap-2">
                     <a
-                      href={`http://localhost:8000/api/export/${report.id}`}
+                      href={`${API_URL}/api/export/${report.id}`}
                       target="_blank"
                       rel="noreferrer"
                       className="p-2 text-fg/50 hover:text-accent hover:bg-accent/10 rounded-md transition-colors"

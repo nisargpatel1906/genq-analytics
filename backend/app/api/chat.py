@@ -1,19 +1,16 @@
 import logging
-import requests
-import json
 import os
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from app.db import reports_db
 from dotenv import load_dotenv
+from services.llm import chat_completion, chat_completion_stream, provider_label
 
 load_dotenv()
 
 logger = logging.getLogger("genq_api.chat")
 router = APIRouter()
-
-ollama_model = os.environ.get("OLLAMA_MODEL")
-ollama_url   = os.environ.get("OLLAMA_URL", "http://localhost:11434")
 
 class ChatMessage(BaseModel):
     role: str  # "user" | "assistant"
@@ -95,25 +92,10 @@ def _build_context(report_data: dict) -> str:
     return "\n".join(ctx_parts)
 
 
-def _call_ollama(messages: list) -> str:
-    """Call Ollama using the /api/chat endpoint (supports multi-turn)."""
-    payload = {
-        "model": ollama_model,
-        "messages": messages,
-        "stream": False,
-        "keep_alive": 120,   # keep model warm for the chat session
-        "options": {"num_gpu": 99}
-    }
-    resp = requests.post(f"{ollama_url}/api/chat", json=payload, timeout=300)
-    resp.raise_for_status()
-    return resp.json().get("message", {}).get("content", "").strip()
-
-
 @router.post("/reports/{report_id}/chat")
 async def chat_with_report(report_id: str, body: ChatRequest):
     """
-    Multi-turn chat endpoint. Each message is answered in the context of the
-    specific report and dataset that was uploaded.
+    Multi-turn chat endpoint. Streams the response token-by-token.
     """
     if report_id not in reports_db:
         raise HTTPException(status_code=404, detail="Report not found")
@@ -121,22 +103,34 @@ async def chat_with_report(report_id: str, body: ChatRequest):
     report_data = reports_db[report_id]
     data_context = _build_context(report_data)
 
-    # Build message list for the LLM
     system_with_context = CHAT_SYSTEM + "\n\n--- REPORT CONTEXT ---\n" + data_context
 
-    # Convert history to the format Ollama /api/chat expects, adding system as first message
-    ollama_messages = [{"role": "system", "content": system_with_context}]
-    for h in body.history[-10:]:  # cap at 10 turns to avoid token overflow
-        ollama_messages.append({"role": h.role, "content": h.content})
-    ollama_messages.append({"role": "user", "content": body.message})
+    llm_messages = [{"role": "system", "content": system_with_context}]
+    for h in body.history[-10:]:
+        llm_messages.append({"role": h.role, "content": h.content})
+    llm_messages.append({"role": "user", "content": body.message})
 
-    try:
-        if ollama_model:
-            reply = _call_ollama(ollama_messages)
-        else:
-            raise HTTPException(status_code=500, detail="No LLM configured (OLLAMA_MODEL missing)")
-    except Exception as e:
-        logger.error(f"Chat error for {report_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"LLM error: {str(e)}")
+    async def generate():
+        try:
+            async for chunk in chat_completion_stream(llm_messages, task="chat", timeout=300):
+                yield f"data: {chunk}\n\n"
+            yield "data: [DONE]\n\n"
+        except Exception as e:
+            logger.error(f"Chat stream error for {report_id}: {e}")
+            yield f"data: [ERROR] {str(e)}\n\n"
 
-    return {"reply": reply}
+    return StreamingResponse(generate(), media_type="text/event-stream")
+
+
+@router.get("/llm/status")
+async def llm_status():
+    return {
+        "mode": os.environ.get("LLM_MODE", "agentic"),
+        "fallback": os.environ.get("LLM_FALLBACK_PROVIDER", ""),
+        "domain": provider_label("domain"),
+        "analysis": provider_label("analysis"),
+        "visual": provider_label("visual"),
+        "report": provider_label("report"),
+        "review": provider_label("review"),
+        "chat": provider_label("chat"),
+    }

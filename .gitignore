@@ -7,17 +7,21 @@ __pycache__/
 venv/
 .venv/
 *.pdf
+*.csv
+
 
 # Environment Variables
 .env
 .env.local
 .env.*.local
+*.log
 
 # Backend
 backend/venv/
 backend/__pycache__/
 backend/reports_store.json
 backend/genq_analytics.log
+backend/*.png
 
 # Frontend
 node_modules/
@@ -34,6 +38,6 @@ graphify-out/
 .DS_Store
 *.swp
 .antigravityrules
-.antigravityrules
 .docs
 .docx
+.pytest_cache

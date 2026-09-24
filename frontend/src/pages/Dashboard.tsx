@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Sparkles, Send, MessageSquare, X, Loader2, Bot, User, FileText, AlertTriangle, Target, ShieldCheck, CheckCircle2, RefreshCw, Clock } from 'lucide-react';
+import { Sparkles, Send, MessageSquare, X, Loader2, Bot, User, FileText, AlertTriangle, Target, ShieldCheck, CheckCircle2, RefreshCw, Clock, GitBranch, TrendingUp, Users, Zap } from 'lucide-react';
 import { Button } from '../components/ui/Button';
 import { Badge } from '../components/ui/Badge';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -371,6 +371,14 @@ export function Dashboard() {
                           agent.round > 0 ? <RefreshCw className="w-4 h-4 text-warning animate-spin" /> : <Loader2 className="w-4 h-4 text-accent animate-spin" />
                         ) : agent.id === 'audit' ? (
                           <ShieldCheck className="w-4 h-4 text-success" />
+                        ) : agent.id === 'causal_analyst' ? (
+                          <GitBranch className="w-4 h-4 text-violet-500" />
+                        ) : agent.id === 'forecaster' ? (
+                          <TrendingUp className="w-4 h-4 text-teal-500" />
+                        ) : agent.id === 'anomaly_detector' ? (
+                          <Users className="w-4 h-4 text-blue-500" />
+                        ) : agent.id === 'strategic_advisor' ? (
+                          <Zap className="w-4 h-4 text-amber-500" />
                         ) : (
                           <CheckCircle2 className="w-4 h-4 text-success" />
                         )}
@@ -403,9 +411,10 @@ export function Dashboard() {
               <div className="px-5 py-4">
                 {[
                   { step: 1, label: 'Mapping Schema', desc: 'Ingesting data and analyzing structures...' },
-                  { step: 2, label: 'Detecting Patterns', desc: 'Running agent workflow...' },
-                  { step: 3, label: 'Preparing Visuals', desc: 'Building charts and insights...' },
-                  { step: 4, label: 'Complete', desc: 'Report ready' },
+                  { step: 2, label: 'Detecting Patterns', desc: 'Running statistical investigation...' },
+                  { step: 3, label: 'Senior Analysis', desc: 'Causal inference, forecasting, anomalies, strategy...' },
+                  { step: 4, label: 'Preparing Visuals', desc: 'Building charts and insights...' },
+                  { step: 5, label: 'Complete', desc: 'Report ready' },
                 ].map(({ step, label, desc }) => (
                   <div key={step} className="py-3 border-b border-border/50 last:border-0 flex gap-4">
                     <div className="mt-0.5">

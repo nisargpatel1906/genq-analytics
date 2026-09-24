@@ -1,3 +1,13 @@
+# Frontend .gitignore
+
+# Environment & Secrets
+.env
+.env*
+.env.*
+.env.local
+.env.*.local
+!.env.example
+
 # Logs
 logs
 *.log
@@ -7,16 +17,20 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
-node_modules
-dist
-dist-ssr
-*.local
+# Dependencies
+node_modules/
+
+# Production Build
+dist/
+dist-ssr/
+.vite/
 
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
-.idea
+.idea/
 .DS_Store
+Thumbs.db
 *.suo
 *.ntvs*
 *.njsproj

@@ -18,7 +18,7 @@ logger = logging.getLogger("genq_api.code_executor")
 WHITELISTED_MODULES = {
     "pandas", "numpy", "matplotlib", "seaborn", "scipy", "json", "math",
     "collections", "itertools", "os", "re", "datetime",
-    "base64", "string", "io"
+    "base64", "string", "io", "pickle", "warnings", "typing"
 }
 
 
@@ -264,6 +264,18 @@ matplotlib.rcParams['savefig.facecolor'] = 'white'
 with open("input_df.pkl", "rb") as f:
     df = pickle.load(f)
 
+# ── AUTO-COERCE DIRTY NUMERIC COLUMNS ──────────────────────────────────────
+# Some datasets store numeric values as strings (e.g. user_avg_rating = "-", "NEW", "3.5")
+# Promote any object column where >40% of non-null values parse as a number.
+for _col in list(df.select_dtypes(include='object').columns):
+    try:
+        _coerced = pd.to_numeric(df[_col], errors='coerce')
+        if _coerced.notna().mean() > 0.4:
+            df[_col] = _coerced
+    except Exception:
+        pass
+# ────────────────────────────────────────────────────────────────────────────
+
 # --- LLM GENERATED CODE ---
 {code}
 # --- END LLM GENERATED CODE ---
@@ -327,6 +339,29 @@ with open("input_df.pkl", "rb") as f:
                         if ftype == "image" or fname.lower().endswith(".png"):
                             with open(fpath, "rb") as f:
                                 raw = f.read()
+                            # ── BLANK CHART DETECTION ──────────────────────────────────────────
+                            # A chart that rendered no data (0-row DataFrame) shows just empty
+                            # axes with near-zero pixel variance. Discard these blank canvases.
+                            try:
+                                import struct, zlib
+                                # Quick grayscale variance check without requiring Pillow:
+                                # decode PNG IDAT chunk to get raw pixel bytes
+                                _is_blank = False
+                                try:
+                                    # Try PIL if available, otherwise skip the check
+                                    from PIL import Image as _PILImage
+                                    import io as _io, numpy as _np
+                                    _img = _np.array(_PILImage.open(_io.BytesIO(raw)).convert("L"))
+                                    if _img.std() < 8.0:  # near-zero variance → blank
+                                        _is_blank = True
+                                except ImportError:
+                                    pass  # PIL not available, skip blank detection
+                                if _is_blank:
+                                    logger.warning(f"Blank chart detected and discarded: '{fname}' (std < 8 — rendered 0 data rows). Check for global dropna on null columns.")
+                                    continue
+                            except Exception:
+                                pass  # detection failed, keep the chart
+                            # ───────────────────────────────────────────────────────────────────
                             output_entry = {
                                 "filename": fname,
                                 "type": "image",
@@ -338,6 +373,7 @@ with open("input_df.pkl", "rb") as f:
                                 "data": raw,
                             }
                             chart_data_list.append({"name": fname, "data": raw})  # compat
+
                         elif ftype in ("analysis_results", "json", "other") or fname.lower().endswith(".json"):
                             with open(fpath, "r", encoding="utf-8") as f:
                                 parsed = json.load(f)

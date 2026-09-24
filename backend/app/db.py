@@ -13,7 +13,7 @@ class JobCancelledException(Exception):
     pass
 
 
-DB_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'reports.db'))
+DB_PATH = os.environ.get("DATABASE_PATH") or os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'reports.db'))
 
 class PersistentJobProxy(dict):
     """A proxy dictionary that transparently persists mutations back to the parent database."""

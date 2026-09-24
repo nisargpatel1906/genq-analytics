@@ -45,6 +45,192 @@ def _add_heading_styled(doc, text, level, accent_color=RGBColor(0x1A, 0x56, 0xDB
         run.font.color.rgb = RGBColor(0x11, 0x11, 0x11)
     return p
 
+def _render_dynamic_sections(doc, ai_report, stats, charts_list, c_accent_rgb):
+    """Renders dynamic reportSections from the AI report.
+    Returns True if dynamic sections were rendered, False to fall back to legacy."""
+    report_sections = ai_report.get("reportSections", [])
+    if not report_sections or not isinstance(report_sections, list):
+        return False
+
+    section_num = 3  # Start at 3 (after Methodology and Executive Summary)
+
+    for section in report_sections:
+        sec_type = section.get("type", "narrative")
+        sec_title = section.get("title", "Analysis")
+
+        _add_heading_styled(doc, f"{section_num}. {sec_title}", 1)
+
+        if sec_type == "data_overview":
+            content = section.get("content", "")
+            if content:
+                doc.add_paragraph(content)
+            doc.add_paragraph()
+
+        elif sec_type == "findings_group":
+            narrative = section.get("narrative", "")
+            if narrative:
+                doc.add_paragraph(narrative)
+
+            findings = section.get("findings", [])
+            for i, f in enumerate(findings, 1):
+                title_t = f.get("title") or f"Finding {i}"
+                detail = f.get("detail") or ""
+                conf = f.get("confidence") or 0
+                effect = f.get("effect_size") or ""
+                practical = f.get("practical_significance") or ""
+
+                _add_heading_styled(doc, f"{i}. {title_t}", 2, c_accent_rgb)
+                
+                if detail:
+                    doc.add_paragraph(detail)
+                
+                if effect:
+                    p_e = doc.add_paragraph()
+                    p_e.paragraph_format.left_indent = Inches(0.25)
+                    run_el = p_e.add_run("Effect Size: ")
+                    run_el.font.bold = True
+                    p_e.add_run(effect)
+                
+                if practical:
+                    p_p = doc.add_paragraph()
+                    p_p.paragraph_format.left_indent = Inches(0.25)
+                    run_pl = p_p.add_run("Practical Significance: ")
+                    run_pl.font.italic = True
+                    p_p.add_run(practical)
+                
+                if conf:
+                    p_c = doc.add_paragraph()
+                    p_c.paragraph_format.left_indent = Inches(0.25)
+                    p_c.paragraph_format.space_after = Pt(12)
+                    run_c = p_c.add_run(f"AI confidence: {conf}%")
+                    run_c.font.size = Pt(8.5)
+                    run_c.font.italic = True
+                    run_c.font.color.rgb = RGBColor(0x6B, 0x72, 0x80)
+            
+            doc.add_paragraph()
+
+        elif sec_type == "trend_analysis":
+            content = section.get("content", "")
+            if content:
+                doc.add_paragraph(content)
+            doc.add_paragraph()
+
+        elif sec_type == "data_table":
+            headers = section.get("headers", [])
+            rows = section.get("rows", [])
+            if headers and rows:
+                table = doc.add_table(rows=len(rows) + 1, cols=len(headers))
+                table.autofit = False
+                
+                # Calculate equal widths (total ~ 6 inches)
+                col_width = Inches(6.0 / len(headers))
+
+                for j, h in enumerate(headers):
+                    cell = table.cell(0, j)
+                    cell.width = col_width
+                    cell.text = h
+                    _set_cell_margins(cell, top=80, bottom=80, left=80, right=80)
+                    _set_cell_background(cell, "111111")
+                    for p in cell.paragraphs:
+                        p.paragraph_format.space_after = Pt(0)
+                        for r in p.runs:
+                            r.font.bold = True
+                            r.font.size = Pt(9)
+                            r.font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
+
+                for i, row in enumerate(rows, 1):
+                    for j, val in enumerate(row):
+                        cell = table.cell(i, j)
+                        cell.width = col_width
+                        cell.text = str(val)
+                        _set_cell_margins(cell, top=80, bottom=80, left=80, right=80)
+                        if i % 2 == 1:
+                            _set_cell_background(cell, "F9FAFB")
+                        for p in cell.paragraphs:
+                            p.paragraph_format.space_after = Pt(0)
+                            for r in p.runs:
+                                r.font.size = Pt(9)
+                                r.font.color.rgb = RGBColor(0x33, 0x33, 0x33)
+
+                doc.add_paragraph()
+
+        elif sec_type == "comparison":
+            content = section.get("content", "")
+            if content:
+                doc.add_paragraph(content)
+            doc.add_paragraph()
+
+        elif sec_type == "anomalies":
+            anomalies = section.get("anomalies", [])
+            for a in anomalies:
+                sev = str(a.get("severity", "medium")).upper()
+                desc = a.get("description", "")
+                impact = a.get("businessImpact", "")
+
+                p_ah = doc.add_paragraph()
+                p_ah.paragraph_format.keep_with_next = True
+                run_ah = p_ah.add_run(f"{a.get('column', 'Unknown')} [{sev}]")
+                run_ah.font.bold = True
+                run_ah.font.size = Pt(11)
+
+                if desc:
+                    p_desc = doc.add_paragraph(desc)
+                    p_desc.paragraph_format.left_indent = Inches(0.25)
+                if impact:
+                    p_i = doc.add_paragraph()
+                    p_i.paragraph_format.left_indent = Inches(0.25)
+                    p_i.paragraph_format.space_after = Pt(10)
+                    run_i = p_i.add_run(f"Business impact: {impact}")
+                    run_i.font.size = Pt(9)
+                    run_i.font.color.rgb = c_accent_rgb
+
+            doc.add_paragraph()
+
+        elif sec_type == "recommendations":
+            recs = section.get("recommendations", [])
+            for i, rec in enumerate(recs, 1):
+                priority = str(rec.get("priority", "Medium")).upper()
+                action = rec.get("action", "")
+                rationale = rec.get("rationale", "")
+                expected = rec.get("expected_outcome", "")
+
+                p_rh = doc.add_paragraph()
+                p_rh.paragraph_format.keep_with_next = True
+                p_rh.paragraph_format.left_indent = Inches(0.25)
+
+                run_num = p_rh.add_run(f"{i}. ")
+                run_num.font.bold = True
+
+                run_act = p_rh.add_run(action)
+                run_act.font.bold = True
+
+                run_pri = p_rh.add_run(f" [{priority}]")
+                run_pri.font.bold = True
+                run_pri.font.color.rgb = c_accent_rgb
+
+                if rationale:
+                    p_rat = doc.add_paragraph(rationale)
+                    p_rat.paragraph_format.left_indent = Inches(0.5)
+                
+                if expected:
+                    p_exp = doc.add_paragraph()
+                    p_exp.paragraph_format.left_indent = Inches(0.5)
+                    run_exp = p_exp.add_run(f"Expected outcome: {expected}")
+                    run_exp.font.italic = True
+                    run_exp.font.color.rgb = c_accent_rgb
+
+            doc.add_paragraph()
+
+        elif sec_type == "narrative":
+            content = section.get("content", "")
+            if content:
+                doc.add_paragraph(content)
+            doc.add_paragraph()
+
+        section_num += 1
+
+    return True
+
 def generate_docx_response(report_id: str, report_data: dict) -> StreamingResponse:
     ai_report   = report_data.get("report", {})
     stats       = report_data.get("stats", {})
@@ -223,6 +409,11 @@ def generate_docx_response(report_id: str, report_data: dict) -> StreamingRespon
             f"This dataset contained {full_count_str} rows — within the full-analysis threshold. "
             f"All statistics, findings, and visualizations are derived from the complete dataset."
         )
+    
+    # Add methodology description from AI report
+    ai_methodology = ai_report.get("methodology", "")
+    if ai_methodology:
+        methodology_text += f"\n\nStatistical Methods Used: {ai_methodology}"
 
     doc.add_paragraph(methodology_text)
 
@@ -261,152 +452,91 @@ def generate_docx_response(report_id: str, report_data: dict) -> StreamingRespon
         doc.add_paragraph(exec_sum)
         doc.add_paragraph()
 
-    # ── 3. Dataset Statistics ────────────────────────────────────────────────────
-    num_summary = stats.get("numeric_summary", {})
-    missing = stats.get("missing_values", {})
-    if num_summary:
-        _add_heading_styled(doc, "3. Dataset Statistics", 1)
-
-        stat_rows = [["Column", "Mean", "Std Dev", "Min", "Max", "Missing"]]
-        for col, d in num_summary.items():
-            stat_rows.append([
-                col[:22],
-                f"{(d.get('mean') or 0):.3f}",
-                f"{(d.get('std') or 0):.3f}",
-                f"{(d.get('min') or 0):.3f}",
-                f"{(d.get('max') or 0):.3f}",
-                str(missing.get(col, 0))
-            ])
-
-        table_s = doc.add_table(rows=len(stat_rows), cols=6)
-        table_s.autofit = False
-
-        for i, row in enumerate(table_s.rows):
-            row.cells[0].width = Inches(1.9)
-            row.cells[1].width = Inches(1.0)
-            row.cells[2].width = Inches(1.0)
-            row.cells[3].width = Inches(0.9)
-            row.cells[4].width = Inches(0.9)
-            row.cells[5].width = Inches(0.8)
-
-            for j, cell in enumerate(row.cells):
-                cell.text = stat_rows[i][j]
-                _set_cell_margins(cell, top=80, bottom=80, left=80, right=80)
-
-                for paragraph in cell.paragraphs:
-                    paragraph.paragraph_format.space_after = Pt(0)
-                    if j > 0:
-                        paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
-                    for run in paragraph.runs:
-                        run.font.size = Pt(9)
-                        if i == 0:
-                            run.font.bold = True
-                            run.font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
-                        else:
-                            run.font.color.rgb = RGBColor(0x33, 0x33, 0x33)
-
-                if i == 0:
-                    _set_cell_background(cell, c_dark_hex)
-                elif i % 2 == 0:
-                    _set_cell_background(cell, c_zebra_hex)
-
-        doc.add_paragraph()
-
-    # ── 4. Data Visualizations & Interpretation ───────────────────────────────
+    # ── Build charts for the document ───────────────────────────────────────────
     charts = build_charts(report_data)
-    if charts:
-        _add_heading_styled(doc, "4. Data Visualizations & Interpretation", 1)
-        doc.add_paragraph(
-            "Each chart below was chosen based on the actual structure of your dataset — "
-            "not a generic template. An interpretation paragraph follows every chart "
-            "explaining what the data is specifically showing."
-        )
 
-        for ch in charts:
-            _add_heading_styled(doc, ch["title"], 2, c_accent_rgb)
+    # ── Try dynamic sections first ──────────────────────────────────────────────
+    used_dynamic = _render_dynamic_sections(doc, ai_report, stats, charts, c_accent_rgb)
 
-            try:
-                ch["buf"].seek(0)
-                doc.add_picture(ch["buf"], width=Inches(5.8))
-            except Exception as e:
-                p_err = doc.add_paragraph(f"[Chart Image Could Not Be Rendered: {e}]")
-                p_err.runs[0].font.color.rgb = RGBColor(0xDC, 0x26, 0x26)
+    if used_dynamic:
+        # Insert visualizations as a separate section after the dynamic content
+        if charts:
+            doc.add_page_break()
+            _add_heading_styled(doc, "Data Visualizations & Interpretation", 1)
+            doc.add_paragraph(
+                "Each chart below was generated based on the actual statistical findings — "
+                "not a generic template. An interpretation paragraph follows every chart."
+            )
 
-            p_interp = doc.add_paragraph()
-            p_interp.paragraph_format.left_indent = Inches(0.25)
-            p_interp.paragraph_format.space_before = Pt(6)
-            p_interp.paragraph_format.space_after = Pt(14)
+            for ch in charts:
+                _add_heading_styled(doc, ch["title"], 2, c_accent_rgb)
+                
+                try:
+                    ch["buf"].seek(0)
+                    doc.add_picture(ch["buf"], width=Inches(5.8))
+                except Exception as e:
+                    p_err = doc.add_paragraph(f"[Chart Image Could Not Be Rendered: {e}]")
+                    p_err.runs[0].font.color.rgb = RGBColor(0xDC, 0x26, 0x26)
 
-            run_lbl = p_interp.add_run("Interpretation: ")
-            run_lbl.font.bold = True
-            run_lbl.font.size = Pt(9.5)
-            run_lbl.font.color.rgb = c_accent_rgb
+                p_interp = doc.add_paragraph()
+                p_interp.paragraph_format.left_indent = Inches(0.25)
+                p_interp.paragraph_format.space_before = Pt(6)
+                p_interp.paragraph_format.space_after = Pt(14)
 
-            run_text = p_interp.add_run(ch["interpretation"])
-            run_text.font.size = Pt(9.5)
-            run_text.font.italic = True
-            run_text.font.color.rgb = RGBColor(0x37, 0x41, 0x51)
+                run_lbl = p_interp.add_run("Interpretation: ")
+                run_lbl.font.bold = True
+                run_lbl.font.size = Pt(9.5)
+                run_lbl.font.color.rgb = c_accent_rgb
 
+                run_text = p_interp.add_run(ch["interpretation"])
+                run_text.font.size = Pt(9.5)
+                run_text.font.italic = True
+                run_text.font.color.rgb = RGBColor(0x37, 0x41, 0x51)
+
+                doc.add_paragraph()
+        
+        # Limitations section
+        limitations = ai_report.get("limitations", [])
+        if limitations:
+            _add_heading_styled(doc, "Limitations & Caveats", 1)
+            for lim in limitations:
+                p_lim = doc.add_paragraph(f"• {lim}")
+                p_lim.paragraph_format.left_indent = Inches(0.25)
             doc.add_paragraph()
+            
+    else:
+        # ── LEGACY FALLBACK: Use the old fixed-section rendering ────────────────
 
-    # ── 5. Key Findings ────────────────────────────────────────────────────────
-    findings = ai_report.get("keyFindings", [])
-    if findings:
-        _add_heading_styled(doc, "5. Key Findings", 1)
+        # ── 3. Dataset Statistics ────────────────────────────────────────────────────
+        num_summary = stats.get("numeric_summary", {})
+        missing = stats.get("missing_values", {})
+        if num_summary:
+            _add_heading_styled(doc, "3. Dataset Statistics", 1)
 
-        for i, f in enumerate(findings, 1):
-            title_t = f.get("title") or f.get("finding") or f"Finding {i}"
-            detail = f.get("detail") or f.get("description") or ""
-            conf = f.get("confidenceScore") or f.get("confidence") or 0
-
-            p_fh = doc.add_paragraph()
-            p_fh.paragraph_format.keep_with_next = True
-            run_fh = p_fh.add_run(f"{i}. {title_t}")
-            run_fh.font.name = 'Arial'
-            run_fh.font.size = Pt(11.5)
-            run_fh.font.bold = True
-            run_fh.font.color.rgb = RGBColor(0x11, 0x11, 0x11)
-
-            if detail:
-                doc.add_paragraph(detail)
-
-            if conf:
-                p_c = doc.add_paragraph()
-                p_c.paragraph_format.space_after = Pt(12)
-                run_c = p_c.add_run(f"AI confidence: {conf}%")
-                run_c.font.size = Pt(8.5)
-                run_c.font.italic = True
-                run_c.font.color.rgb = RGBColor(0x6B, 0x72, 0x80)
-
-        doc.add_paragraph()
-
-    # ── 6. Anomalies Detected ──────────────────────────────────────────────────
-    anomalies_ai = ai_report.get("anomalies", [])
-    stat_anomalies = stats.get("statistical_anomalies", [])
-    if anomalies_ai or stat_anomalies:
-        _add_heading_styled(doc, "6. Anomalies Detected", 1)
-
-        if stat_anomalies:
-            _add_heading_styled(doc, "Statistically Flagged Columns (Z-score > 3σ)", 2, c_accent_rgb)
-
-            tdata = [["Column", "Outlier Rows", "Column Mean"]]
-            for a in stat_anomalies:
-                tdata.append([
-                    a.get("column", ""),
-                    str(a.get("outlier_count", "")),
-                    f"{a.get('mean', 0):.4f}"
+            stat_rows = [["Column", "Mean", "Std Dev", "Min", "Max", "Missing"]]
+            for col, d in num_summary.items():
+                stat_rows.append([
+                    col[:22],
+                    f"{(d.get('mean') or 0):.3f}",
+                    f"{(d.get('std') or 0):.3f}",
+                    f"{(d.get('min') or 0):.3f}",
+                    f"{(d.get('max') or 0):.3f}",
+                    str(missing.get(col, 0))
                 ])
 
-            table_a = doc.add_table(rows=len(tdata), cols=3)
-            table_a.autofit = False
+            table_s = doc.add_table(rows=len(stat_rows), cols=6)
+            table_s.autofit = False
 
-            for i, row in enumerate(table_a.rows):
-                row.cells[0].width = Inches(2.2)
-                row.cells[1].width = Inches(1.8)
-                row.cells[2].width = Inches(2.5)
+            for i, row in enumerate(table_s.rows):
+                row.cells[0].width = Inches(1.9)
+                row.cells[1].width = Inches(1.0)
+                row.cells[2].width = Inches(1.0)
+                row.cells[3].width = Inches(0.9)
+                row.cells[4].width = Inches(0.9)
+                row.cells[5].width = Inches(0.8)
 
                 for j, cell in enumerate(row.cells):
-                    cell.text = tdata[i][j]
+                    cell.text = stat_rows[i][j]
                     _set_cell_margins(cell, top=80, bottom=80, left=80, right=80)
 
                     for paragraph in cell.paragraphs:
@@ -423,61 +553,176 @@ def generate_docx_response(report_id: str, report_data: dict) -> StreamingRespon
 
                     if i == 0:
                         _set_cell_background(cell, c_dark_hex)
-                    elif i % 2 == 1:
-                        _set_cell_background(cell, c_alert_hex)
+                    elif i % 2 == 0:
+                        _set_cell_background(cell, c_zebra_hex)
 
             doc.add_paragraph()
 
-        if anomalies_ai:
-            for a in anomalies_ai:
-                sev = str(a.get("severity", "medium")).upper()
-                desc = a.get("description", "")
-                impact = a.get("businessImpact", "")
+        # ── 4. Data Visualizations & Interpretation ───────────────────────────────
+        if charts:
+            _add_heading_styled(doc, "4. Data Visualizations & Interpretation", 1)
+            doc.add_paragraph(
+                "Each chart below was chosen based on the actual structure of your dataset — "
+                "not a generic template. An interpretation paragraph follows every chart "
+                "explaining what the data is specifically showing."
+            )
 
-                p_ah = doc.add_paragraph()
-                p_ah.paragraph_format.keep_with_next = True
-                run_ah = p_ah.add_run(f"{a.get('column', 'Unknown')} [{sev}]")
-                run_ah.font.bold = True
-                run_ah.font.size = Pt(11)
+            for ch in charts:
+                _add_heading_styled(doc, ch["title"], 2, c_accent_rgb)
 
-                if desc:
-                    doc.add_paragraph(desc)
-                if impact:
-                    p_i = doc.add_paragraph()
-                    p_i.paragraph_format.space_after = Pt(10)
-                    run_i = p_i.add_run(f"Business impact: {impact}")
-                    run_i.font.size = Pt(9)
-                    run_i.font.color.rgb = c_accent_rgb
+                try:
+                    ch["buf"].seek(0)
+                    doc.add_picture(ch["buf"], width=Inches(5.8))
+                except Exception as e:
+                    p_err = doc.add_paragraph(f"[Chart Image Could Not Be Rendered: {e}]")
+                    p_err.runs[0].font.color.rgb = RGBColor(0xDC, 0x26, 0x26)
+
+                p_interp = doc.add_paragraph()
+                p_interp.paragraph_format.left_indent = Inches(0.25)
+                p_interp.paragraph_format.space_before = Pt(6)
+                p_interp.paragraph_format.space_after = Pt(14)
+
+                run_lbl = p_interp.add_run("Interpretation: ")
+                run_lbl.font.bold = True
+                run_lbl.font.size = Pt(9.5)
+                run_lbl.font.color.rgb = c_accent_rgb
+
+                run_text = p_interp.add_run(ch["interpretation"])
+                run_text.font.size = Pt(9.5)
+                run_text.font.italic = True
+                run_text.font.color.rgb = RGBColor(0x37, 0x41, 0x51)
+
+                doc.add_paragraph()
+
+        # ── 5. Key Findings ────────────────────────────────────────────────────────
+        findings = ai_report.get("keyFindings", [])
+        if findings:
+            _add_heading_styled(doc, "5. Key Findings", 1)
+
+            for i, f in enumerate(findings, 1):
+                title_t = f.get("title") or f.get("finding") or f"Finding {i}"
+                detail = f.get("detail") or f.get("description") or ""
+                conf = f.get("confidenceScore") or f.get("confidence") or 0
+
+                p_fh = doc.add_paragraph()
+                p_fh.paragraph_format.keep_with_next = True
+                run_fh = p_fh.add_run(f"{i}. {title_t}")
+                run_fh.font.name = 'Arial'
+                run_fh.font.size = Pt(11.5)
+                run_fh.font.bold = True
+                run_fh.font.color.rgb = RGBColor(0x11, 0x11, 0x11)
+
+                if detail:
+                    doc.add_paragraph(detail)
+
+                if conf:
+                    p_c = doc.add_paragraph()
+                    p_c.paragraph_format.space_after = Pt(12)
+                    run_c = p_c.add_run(f"AI confidence: {conf}%")
+                    run_c.font.size = Pt(8.5)
+                    run_c.font.italic = True
+                    run_c.font.color.rgb = RGBColor(0x6B, 0x72, 0x80)
 
             doc.add_paragraph()
 
-    # ── 7. Recommendations ────────────────────────────────────────────────────
-    recs = ai_report.get("recommendations", [])
-    if recs:
-        _add_heading_styled(doc, "7. Recommendations", 1)
+        # ── 6. Anomalies Detected ──────────────────────────────────────────────────
+        anomalies_ai = ai_report.get("anomalies", [])
+        stat_anomalies = stats.get("statistical_anomalies", [])
+        if anomalies_ai or stat_anomalies:
+            _add_heading_styled(doc, "6. Anomalies Detected", 1)
 
-        for i, rec in enumerate(recs, 1):
-            priority = str(rec.get("priority", "Medium")).upper()
-            action = rec.get("action", "")
-            rationale = rec.get("rationale", "")
+            if stat_anomalies:
+                _add_heading_styled(doc, "Statistically Flagged Columns (Z-score > 3σ)", 2, c_accent_rgb)
 
-            p_rh = doc.add_paragraph()
-            p_rh.paragraph_format.keep_with_next = True
+                tdata = [["Column", "Outlier Rows", "Column Mean"]]
+                for a in stat_anomalies:
+                    tdata.append([
+                        a.get("column", ""),
+                        str(a.get("outlier_count", "")),
+                        f"{a.get('mean', 0):.4f}"
+                    ])
 
-            run_num = p_rh.add_run(f"{i}. ")
-            run_num.font.bold = True
+                table_a = doc.add_table(rows=len(tdata), cols=3)
+                table_a.autofit = False
 
-            run_act = p_rh.add_run(action)
-            run_act.font.bold = True
+                for i, row in enumerate(table_a.rows):
+                    row.cells[0].width = Inches(2.2)
+                    row.cells[1].width = Inches(1.8)
+                    row.cells[2].width = Inches(2.5)
 
-            run_pri = p_rh.add_run(f" [{priority}]")
-            run_pri.font.bold = True
-            run_pri.font.color.rgb = c_accent_rgb
+                    for j, cell in enumerate(row.cells):
+                        cell.text = tdata[i][j]
+                        _set_cell_margins(cell, top=80, bottom=80, left=80, right=80)
 
-            if rationale:
-                doc.add_paragraph(rationale)
+                        for paragraph in cell.paragraphs:
+                            paragraph.paragraph_format.space_after = Pt(0)
+                            if j > 0:
+                                paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                            for run in paragraph.runs:
+                                run.font.size = Pt(9)
+                                if i == 0:
+                                    run.font.bold = True
+                                    run.font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
+                                else:
+                                    run.font.color.rgb = RGBColor(0x33, 0x33, 0x33)
 
-        doc.add_paragraph()
+                        if i == 0:
+                            _set_cell_background(cell, c_dark_hex)
+                        elif i % 2 == 1:
+                            _set_cell_background(cell, c_alert_hex)
+
+                doc.add_paragraph()
+
+            if anomalies_ai:
+                for a in anomalies_ai:
+                    sev = str(a.get("severity", "medium")).upper()
+                    desc = a.get("description", "")
+                    impact = a.get("businessImpact", "")
+
+                    p_ah = doc.add_paragraph()
+                    p_ah.paragraph_format.keep_with_next = True
+                    run_ah = p_ah.add_run(f"{a.get('column', 'Unknown')} [{sev}]")
+                    run_ah.font.bold = True
+                    run_ah.font.size = Pt(11)
+
+                    if desc:
+                        doc.add_paragraph(desc)
+                    if impact:
+                        p_i = doc.add_paragraph()
+                        p_i.paragraph_format.space_after = Pt(10)
+                        run_i = p_i.add_run(f"Business impact: {impact}")
+                        run_i.font.size = Pt(9)
+                        run_i.font.color.rgb = c_accent_rgb
+
+                doc.add_paragraph()
+
+        # ── 7. Recommendations ────────────────────────────────────────────────────
+        recs = ai_report.get("recommendations", [])
+        if recs:
+            _add_heading_styled(doc, "7. Recommendations", 1)
+
+            for i, rec in enumerate(recs, 1):
+                priority = str(rec.get("priority", "Medium")).upper()
+                action = rec.get("action", "")
+                rationale = rec.get("rationale", "")
+
+                p_rh = doc.add_paragraph()
+                p_rh.paragraph_format.keep_with_next = True
+
+                run_num = p_rh.add_run(f"{i}. ")
+                run_num.font.bold = True
+
+                run_act = p_rh.add_run(action)
+                run_act.font.bold = True
+
+                run_pri = p_rh.add_run(f" [{priority}]")
+                run_pri.font.bold = True
+                run_pri.font.color.rgb = c_accent_rgb
+
+                if rationale:
+                    doc.add_paragraph(rationale)
+
+            doc.add_paragraph()
 
     # Save to BytesIO buffer
     bio = io.BytesIO()

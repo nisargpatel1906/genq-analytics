@@ -30,16 +30,45 @@ export interface ChartItem {
   image: string;
 }
 
+export interface ReportSectionFinding {
+  title?: string;
+  detail?: string;
+  confidence?: number;
+  impact_score?: number;
+  effect_size?: string;
+  practical_significance?: string;
+  supporting_chart?: string;
+}
+
+export interface ReportSection {
+  type: 'findings_group' | 'data_overview' | 'trend_analysis' | 'anomalies' | 'comparison' | 'data_table' | 'recommendations' | 'narrative';
+  title: string;
+  content?: string;
+  narrative?: string;
+  findings?: ReportSectionFinding[];
+  anomalies?: { column?: string; severity?: string; description?: string; businessImpact?: string }[];
+  recommendations?: { action?: string; rationale?: string; priority?: string; expected_outcome?: string }[];
+  headers?: string[];
+  rows?: string[][];
+}
+
 export interface ReportData {
   id: string;
   filename: string;
   created_at?: string;
   report: {
+    report_planning?: {
+      data_relevance_evaluation?: string;
+      narrative_flow_strategy?: string;
+    };
     domain?: string;
     executiveSummary?: string;
-    keyFindings?: { title?: string; finding?: string; detail?: string; description?: string; confidenceScore?: number; confidence?: number }[];
+    methodology?: string;
+    reportSections?: ReportSection[];
+    limitations?: string[];
+    keyFindings?: { title?: string; finding?: string; detail?: string; description?: string; confidenceScore?: number; confidence?: number; effect_size?: string; practical_significance?: string; impact_score?: number }[];
     anomalies?: { column?: string; severity?: string; description?: string; businessImpact?: string }[];
-    recommendations?: { action?: string; rationale?: string; priority?: string }[];
+    recommendations?: { action?: string; rationale?: string; priority?: string; expected_outcome?: string }[];
     _meta?: {
       agentWorkflow?: {
         approved?: boolean;

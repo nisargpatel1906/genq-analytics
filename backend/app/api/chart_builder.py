@@ -14,9 +14,79 @@ from app.utils import coerce_numeric_series
 TABLEAU10 = ["#4E79A7", "#F28E2B", "#E15759", "#76B7B2", "#59A14F",
              "#EDC949", "#AF7AA1", "#FF9DA7", "#9C755F", "#BAB0AB"]
 
+# ── Currency Detection for Chart Labels ────────────────────────────────────────
+
+def _detect_column_currency(col_name: str, df=None) -> str:
+    """Detects the likely currency symbol for a column based on its name.
+    Returns the symbol string (e.g., '₹', '$', '€', '£') or '' if not monetary."""
+    col_lower = col_name.lower().replace('_', ' ').replace('-', ' ')
+    
+    currency_map = {
+        'inr': '₹', 'rs': '₹', 'rupee': '₹', 'rupees': '₹',
+        'usd': '$', 'dollar': '$', 'dollars': '$',
+        'eur': '€', 'euro': '€', 'euros': '€',
+        'gbp': '£', 'pound': '£', 'pounds': '£',
+    }
+    for indicator, symbol in currency_map.items():
+        if indicator in col_lower.split():
+            return symbol
+    return ''
+
+
+def _format_axis_label(col_name: str) -> str:
+    """Creates a descriptive axis label with units/currency if detectable."""
+    currency = _detect_column_currency(col_name)
+    # Clean up the column name for display
+    display_name = col_name.replace('_', ' ').title()
+    if currency:
+        return f"{display_name} ({currency})"
+    return display_name
+
+
+def _format_chart_professional(fig, ax, title: str, subtitle: str = "",
+                                x_label: str = "", y_label: str = ""):
+    """Applies professional formatting to a matplotlib chart for publication quality."""
+    import matplotlib.ticker as ticker
+    
+    # Title and subtitle
+    ax.set_title(title, fontsize=14, fontweight='bold', pad=20, loc='left', color='#1a1a2e')
+    if subtitle:
+        ax.text(0.0, 1.02, subtitle, transform=ax.transAxes,
+                fontsize=9, color='#6B7280', style='italic', va='bottom')
+    
+    # Axis labels
+    if x_label:
+        ax.set_xlabel(x_label, fontsize=11, labelpad=8, color='#374151')
+    if y_label:
+        ax.set_ylabel(y_label, fontsize=11, labelpad=8, color='#374151')
+    
+    # Grid and spines
+    ax.grid(True, alpha=0.25, linestyle='-', linewidth=0.5)
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    ax.spines['left'].set_color('#D1D5DB')
+    ax.spines['bottom'].set_color('#D1D5DB')
+    
+    # Tick formatting
+    ax.tick_params(axis='both', labelsize=9, colors='#4B5563')
+    
+    # Format large numbers with thousand separators on y-axis
+    try:
+        if ax.get_ylim()[1] > 1000:
+            ax.yaxis.set_major_formatter(ticker.FuncFormatter(
+                lambda x, p: f'{x:,.0f}' if x >= 1 else f'{x:.2f}'
+            ))
+    except Exception:
+        pass
+    
+    # Source footer
+    fig.text(0.99, 0.01, 'GenQ Analytics', fontsize=7, color='#9CA3AF',
+             ha='right', va='bottom', style='italic')
+
+
 def _save(fig) -> io.BytesIO:
     buf = io.BytesIO()
-    fig.savefig(buf, format="png", dpi=180, bbox_inches="tight", facecolor="white")
+    fig.savefig(buf, format="png", dpi=200, bbox_inches="tight", facecolor="white")
     buf.seek(0)
     plt.close(fig)
     return buf
@@ -79,7 +149,7 @@ def _build_planned_charts(df: pd.DataFrame, plan: dict) -> list:
             continue
 
         try:
-            fig, ax = plt.subplots(figsize=(9, 4.8))
+            fig, ax = plt.subplots(figsize=(10, 5.5))
             title = str(spec.get("title") or "Data visualization")
             reason = str(spec.get("reason") or "Supports the verified report findings.")
 
@@ -156,9 +226,12 @@ def _build_planned_charts(df: pd.DataFrame, plan: dict) -> list:
                 plt.close(fig)
                 continue
 
-            ax.set_title(title, fontsize=12, fontweight="bold")
-            ax.spines["top"].set_visible(False)
-            ax.spines["right"].set_visible(False)
+            x_label = _format_axis_label(x) if x else ""
+            y_label = _format_axis_label(y) if y else ""
+            n_points = len(df)
+            subtitle = f"n = {n_points:,} records"
+            _format_chart_professional(fig, ax, title, subtitle=subtitle,
+                                       x_label=x_label, y_label=y_label)
             plt.tight_layout()
             charts.append({"title": title, "buf": _save(fig), "interpretation": reason})
         except (TypeError, ValueError, KeyError):
@@ -239,8 +312,10 @@ def build_charts(report_data: dict) -> list:
                 axes[i].set_title(col[:18], fontsize=9, fontweight="bold")
                 axes[i].spines["top"].set_visible(False)
                 axes[i].spines["right"].set_visible(False)
-            fig.suptitle(f"Top Features by '{target}' Class", fontsize=11, fontweight="bold")
+            fig.suptitle(f"Top Features by '{target}' Class", fontsize=13, fontweight="bold")
             plt.tight_layout()
+            fig.text(0.99, 0.01, 'GenQ Analytics', fontsize=7, color='#9CA3AF',
+                     ha='right', va='bottom', style='italic')
 
             parts = []
             for _, feat in diffs[:3]:
@@ -264,20 +339,33 @@ def build_charts(report_data: dict) -> list:
             best_col = max(num_cols, key=lambda c: df_t[c].std() if df_t[c].std() > 0 else 0)
             trend = df_t.set_index(dt_col)[best_col].resample("D").mean().dropna()
             if len(trend) >= 3:
-                fig, ax = plt.subplots(figsize=(9, 3.8))
-                ax.fill_between(trend.index, trend.values, alpha=0.2, color=TABLEAU10[0])
-                ax.plot(trend.index, trend.values, color=TABLEAU10[0], linewidth=1.5)
-                ax.set_xlabel(dt_col, fontsize=9)
-                ax.set_ylabel(best_col, fontsize=9)
-                ax.set_title(f"{best_col} Over Time", fontsize=11, fontweight="bold")
-                ax.spines["top"].set_visible(False)
-                ax.spines["right"].set_visible(False)
+                fig, ax = plt.subplots(figsize=(10, 5))
+                ax.fill_between(trend.index, trend.values, alpha=0.15, color=TABLEAU10[0])
+                ax.plot(trend.index, trend.values, color=TABLEAU10[0], linewidth=2)
+                
+                # Annotate peak and trough
+                peak_idx = trend.idxmax()
+                trough_idx = trend.idxmin()
+                ax.annotate(f'Peak: {trend.max():.1f}',
+                           xy=(peak_idx, trend.max()), xytext=(10, 15),
+                           textcoords='offset points', fontsize=8, color=TABLEAU10[2],
+                           arrowprops=dict(arrowstyle='->', color=TABLEAU10[2], lw=1.2))
+                ax.annotate(f'Low: {trend.min():.1f}',
+                           xy=(trough_idx, trend.min()), xytext=(10, -20),
+                           textcoords='offset points', fontsize=8, color=TABLEAU10[0],
+                           arrowprops=dict(arrowstyle='->', color=TABLEAU10[0], lw=1.2))
+                
+                y_label = _format_axis_label(best_col)
+                subtitle = f"Daily average | {len(trend)} data points"
+                _format_chart_professional(fig, ax, f"{best_col} Over Time", subtitle=subtitle,
+                                           x_label=dt_col, y_label=y_label)
                 plt.xticks(rotation=25, fontsize=8)
                 plt.tight_layout()
-                peak = trend.idxmax().strftime("%Y-%m-%d")
+                peak = peak_idx.strftime("%Y-%m-%d")
                 interp = (
                     f"Time series of '{best_col}' (selected as the most variable metric). "
-                    f"Peak value occurred around {peak}. "
+                    f"Peak value of {trend.max():.2f} occurred around {peak}. "
+                    f"The range spans from {trend.min():.2f} to {trend.max():.2f}. "
                     "Spikes may indicate seasonal patterns, data entry events, or external triggers worth investigating."
                 )
                 charts.append({"title": f"{best_col} Trend Over Time", "buf": _save(fig), "interpretation": interp})
@@ -297,35 +385,45 @@ def build_charts(report_data: dict) -> list:
         if col_a and col_b and abs(best_r) > 0.30 and col_a in df.columns and col_b in df.columns:
             plot_df = df[[col_a, col_b]].dropna()
             if len(plot_df) > 10:
-                fig, ax = plt.subplots(figsize=(6.5, 4.5))
+                fig, ax = plt.subplots(figsize=(8, 5.5))
                 color_note = ""
                 if cat_cols and cat_cols[0] in df.columns:
                     groups = df[cat_cols[0]].dropna().unique()[:8]
                     for i, g in enumerate(groups):
                         sub = df[df[cat_cols[0]] == g][[col_a, col_b]].dropna()
                         ax.scatter(sub[col_a], sub[col_b], label=str(g),
-                                   alpha=0.65, color=TABLEAU10[i % len(TABLEAU10)], s=28)
-                    ax.legend(title=cat_cols[0], fontsize=8, title_fontsize=8)
+                                   alpha=0.65, color=TABLEAU10[i % len(TABLEAU10)], s=32)
+                    ax.legend(title=cat_cols[0].replace('_', ' ').title(), fontsize=8, title_fontsize=9,
+                             frameon=True, fancybox=True, framealpha=0.9)
                     color_note = f" Points colored by '{cat_cols[0]}'."
                 else:
-                    ax.scatter(plot_df[col_a], plot_df[col_b], alpha=0.5, color=TABLEAU10[0], s=28)
+                    ax.scatter(plot_df[col_a], plot_df[col_b], alpha=0.5, color=TABLEAU10[0], s=32)
 
                 z = np.polyfit(plot_df[col_a].fillna(0), plot_df[col_b].fillna(0), 1)
                 xline = np.linspace(plot_df[col_a].min(), plot_df[col_a].max(), 100)
-                ax.plot(xline, np.poly1d(z)(xline), "--", color="#E15759", linewidth=1.5, label=f"r={best_r:.2f}")
+                ax.plot(xline, np.poly1d(z)(xline), "--", color="#E15759", linewidth=1.8, label=f"Trend (r={best_r:.2f})")
                 ax.legend(fontsize=8)
-                ax.set_xlabel(col_a, fontsize=9)
-                ax.set_ylabel(col_b, fontsize=9)
-                ax.set_title(f"Relationship: {col_a} vs {col_b}", fontsize=11, fontweight="bold")
-                ax.spines["top"].set_visible(False)
-                ax.spines["right"].set_visible(False)
-                plt.tight_layout()
-
+                
+                # Add R² annotation text box
+                r_squared = best_r ** 2
+                textstr = f'r = {best_r:.3f}\nR² = {r_squared:.3f}\nn = {len(plot_df):,}'
+                props = dict(boxstyle='round,pad=0.5', facecolor='#F0F4FF', alpha=0.85, edgecolor='#D1D5DB')
+                ax.text(0.97, 0.03, textstr, transform=ax.transAxes, fontsize=9,
+                        verticalalignment='bottom', horizontalalignment='right', bbox=props)
+                
+                x_label = _format_axis_label(col_a)
+                y_label = _format_axis_label(col_b)
                 strength  = "very strong" if abs(best_r) > 0.8 else "strong" if abs(best_r) > 0.6 else "moderate"
                 direction = "positive" if best_r > 0 else "negative"
+                subtitle = f"{strength.title()} {direction} correlation | r = {best_r:.2f}, R² = {r_squared:.2f}"
+                _format_chart_professional(fig, ax, f"Relationship: {col_a} vs {col_b}",
+                                           subtitle=subtitle, x_label=x_label, y_label=y_label)
+                plt.tight_layout()
+
                 interp = (
                     f"This scatter plot shows the {strength} {direction} correlation (r = {best_r:.2f}) between "
                     f"'{col_a}' and '{col_b}' — the strongest linear relationship in the dataset.{color_note} "
+                    f"R² = {r_squared:.2f} means {col_a} explains {r_squared*100:.1f}% of the variance in {col_b}. "
                     "The dashed line is the regression trend. Points close to the line confirm the relationship "
                     "is consistent; outliers far from it may deserve investigation."
                 )
@@ -347,14 +445,22 @@ def build_charts(report_data: dict) -> list:
             if best_metric:
                 gd = df.groupby(best_cat)[best_metric].agg(["mean", "std"]).dropna()
                 gd = gd.sort_values("mean", ascending=True)
-                fig, ax = plt.subplots(figsize=(8, max(3.5, len(gd) * 0.45)))
-                ax.barh(gd.index.astype(str), gd["mean"],
+                fig, ax = plt.subplots(figsize=(9, max(4, len(gd) * 0.5)))
+                bars = ax.barh(gd.index.astype(str), gd["mean"],
                         xerr=gd["std"].fillna(0), capsize=4,
-                        color=TABLEAU10[:len(gd)], alpha=0.85, height=0.6)
-                ax.set_xlabel(f"Mean {best_metric}", fontsize=9)
-                ax.set_title(f"{best_metric} by {best_cat}", fontsize=11, fontweight="bold")
-                ax.spines["top"].set_visible(False)
-                ax.spines["right"].set_visible(False)
+                        color=TABLEAU10[:len(gd)], alpha=0.88, height=0.6)
+                
+                # Add value labels on bars
+                currency_symbol = _detect_column_currency(best_metric)
+                for i, (idx, row) in enumerate(gd.iterrows()):
+                    label = f"{currency_symbol}{row['mean']:,.1f}" if currency_symbol else f"{row['mean']:,.1f}"
+                    ax.text(row['mean'] + gd['std'].max() * 0.1, i, label,
+                           va='center', ha='left', fontsize=8, color='#374151', fontweight='bold')
+                
+                x_label = _format_axis_label(best_metric)
+                subtitle = f"Mean values with ±1 std dev | {len(gd)} groups"
+                _format_chart_professional(fig, ax, f"{best_metric} by {best_cat}",
+                                           subtitle=subtitle, x_label=x_label, y_label="")
                 plt.tight_layout()
 
                 top_g = gd["mean"].idxmax()
@@ -363,7 +469,7 @@ def build_charts(report_data: dict) -> list:
                           max(abs(gd.loc[bot_g, "mean"]), 1)) * 100
                 interp = (
                     f"Horizontal bars compare average '{best_metric}' across each '{best_cat}' group. "
-                    f"'{top_g}' is highest ({gd.loc[top_g,'mean']:.2f}) and '{bot_g}' is lowest ({gd.loc[bot_g,'mean']:.2f}) "
+                    f"'{top_g}' is highest ({currency_symbol}{gd.loc[top_g,'mean']:,.2f}) and '{bot_g}' is lowest ({currency_symbol}{gd.loc[bot_g,'mean']:,.2f}) "
                     f"— a {pct:.0f}% difference. Error bars show ± one standard deviation. "
                     "Groups with wide bars are internally variable; narrow bars mean consistent behaviour within that group."
                 )
@@ -377,21 +483,26 @@ def build_charts(report_data: dict) -> list:
         )[:3]
         if skews:
             n = len(skews)
-            fig, axes = plt.subplots(1, n, figsize=(5 * n, 4))
+            fig, axes = plt.subplots(1, n, figsize=(5.5 * n, 4.5))
             if n == 1:
                 axes = [axes]
             for i, (_, sk, col) in enumerate(skews):
                 vals = df[col].dropna()
                 axes[i].hist(vals, bins=30, color=TABLEAU10[i], alpha=0.82, edgecolor="white")
-                axes[i].axvline(vals.mean(),   color="#E15759", lw=1.5, ls="--", label=f"Mean {vals.mean():.2f}")
-                axes[i].axvline(vals.median(), color="#4E79A7", lw=1.5, ls=":",  label=f"Median {vals.median():.2f}")
-                axes[i].legend(fontsize=7)
-                axes[i].set_xlabel(col, fontsize=9)
-                axes[i].set_title(f"{col[:16]} (skew={sk:.2f})", fontsize=9, fontweight="bold")
+                axes[i].axvline(vals.mean(),   color="#E15759", lw=1.8, ls="--", label=f"Mean {vals.mean():.2f}")
+                axes[i].axvline(vals.median(), color="#4E79A7", lw=1.8, ls=":",  label=f"Median {vals.median():.2f}")
+                axes[i].legend(fontsize=8, frameon=True, fancybox=True, framealpha=0.9)
+                x_label = _format_axis_label(col)
+                axes[i].set_xlabel(x_label, fontsize=9)
+                axes[i].set_ylabel('Frequency', fontsize=9)
+                axes[i].set_title(f"{col[:18]} (skew={sk:.2f})", fontsize=10, fontweight="bold")
                 axes[i].spines["top"].set_visible(False)
                 axes[i].spines["right"].set_visible(False)
-            fig.suptitle("Value Distribution — Most Skewed Columns", fontsize=11, fontweight="bold")
+                axes[i].grid(True, alpha=0.2)
+            fig.suptitle("Value Distribution — Most Skewed Columns", fontsize=13, fontweight="bold")
             plt.tight_layout()
+            fig.text(0.99, 0.01, 'GenQ Analytics', fontsize=7, color='#9CA3AF',
+                     ha='right', va='bottom', style='italic')
 
             descs = []
             for _, sk, col in skews:
@@ -419,12 +530,17 @@ def build_charts(report_data: dict) -> list:
             if counts.empty:
                 continue
 
-            fig, ax = plt.subplots(figsize=(8, max(3.5, len(counts) * 0.42)))
-            ax.barh(counts.index, counts.values, color=[TABLEAU10[i % len(TABLEAU10)] for i in range(len(counts))], alpha=0.88)
-            ax.set_xlabel("Records", fontsize=9)
-            ax.set_title(f"Record Count by {cat}", fontsize=11, fontweight="bold")
-            ax.spines["top"].set_visible(False)
-            ax.spines["right"].set_visible(False)
+            fig, ax = plt.subplots(figsize=(9, max(4, len(counts) * 0.45)))
+            bars = ax.barh(counts.index, counts.values, color=[TABLEAU10[i % len(TABLEAU10)] for i in range(len(counts))], alpha=0.88)
+            
+            # Add value labels on bars
+            for i, (idx, val) in enumerate(zip(counts.index, counts.values)):
+                ax.text(val + counts.max() * 0.02, i, f'{int(val):,}',
+                       va='center', ha='left', fontsize=8, color='#374151', fontweight='bold')
+            
+            subtitle = f"{len(counts)} categories shown"
+            _format_chart_professional(fig, ax, f"Record Count by {cat}",
+                                       subtitle=subtitle, x_label="Records", y_label="")
             plt.tight_layout()
 
             top_label = counts.idxmax()
@@ -432,7 +548,8 @@ def build_charts(report_data: dict) -> list:
             total = int(counts.sum())
             interp = (
                 f"This chart shows how records are distributed across '{cat}'. "
-                f"'{top_label}' is the largest group with {top_count:,} of the top {total:,} displayed records. "
+                f"'{top_label}' is the largest group with {top_count:,} of the top {total:,} displayed records "
+                f"({top_count/total*100:.1f}% share). "
                 "This is useful for profile-style datasets where most fields are descriptive rather than numeric."
             )
             charts.append({"title": f"Record Count by {cat}", "buf": _save(fig), "interpretation": interp})

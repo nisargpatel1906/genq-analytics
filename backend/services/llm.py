@@ -19,8 +19,11 @@ NVIDIA_DEFAULT_VISUAL_MODEL = "nvidia/llama-3.3-nemotron-super-49b-v1.5"
 NVIDIA_DEFAULT_REPORT_MODEL = "nvidia/llama-3.3-nemotron-super-49b-v1.5"
 NVIDIA_DEFAULT_BASE_URL = "https://integrate.api.nvidia.com/v1"
 
-OPENROUTER_DEFAULT_MODEL = "nvidia/nemotron-3-super-120b-a12b:free"
+OPENROUTER_DEFAULT_MODEL = "inclusionai/ling-3.0-flash-fin:free"
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+
+GROQ_DEFAULT_MODEL = "openai/gpt-oss-120b"
+GROQ_BASE_URL = "https://api.groq.com/openai/v1"
 
 
 def _get_env(key: str, default: str = "") -> str:
@@ -33,15 +36,25 @@ def _get_env(key: str, default: str = "") -> str:
 def _configured_provider(provider_override: str | None = None) -> str:
     provider = provider_override or _get_env("LLM_PROVIDER")
     if provider:
-        return provider.strip().lower()
-    if _get_env("GEMINI_API_KEY"):
-        return "gemini"
-    return "openrouter" if _get_env("OPENROUTER_API_KEY") else "nvidia"
+        p = provider.strip().lower()
+        if p == "openrouter":
+            # Auto-detect if key is actually a Groq key (gsk_...)
+            key = os.environ.get("OPENROUTER_API_KEY", "")
+            if key.startswith("gsk_"):
+                return "groq"
+        return p
+    if os.environ.get("GROQ_API_KEY") or os.environ.get("OPENROUTER_API_KEY", "").startswith("gsk_"):
+        return "groq"
+    return "openrouter"
 
 
 def _model_for(task: str, provider_override: str | None = None) -> str | None:
     task_key = task.upper()
     provider = _configured_provider(provider_override)
+
+    if provider == "groq":
+        val = _get_env(f"GROQ_{task_key}_MODEL") or _get_env("GROQ_MODEL", GROQ_DEFAULT_MODEL)
+        return val.strip()
 
     if provider == "nvidia":
         explicit_model = _get_env(f"LLM_{task_key}_MODEL")
@@ -90,11 +103,20 @@ def _require_model(task: str, provider_override: str | None = None) -> tuple[str
     model = _model_for(task, provider_override)
     if not model:
         raise RuntimeError(
-            "No LLM model configured. Set NVIDIA_API_KEY for NVIDIA NIM, "
-            "OPENROUTER_API_KEY for OpenRouter, GEMINI_API_KEY for Gemini, "
-            "or LLM_PROVIDER=ollama for local Ollama."
+            "No LLM model configured. Set GROQ_API_KEY for Groq, "
+            "OPENROUTER_API_KEY for OpenRouter, NVIDIA_API_KEY for NVIDIA NIM, "
+            "GEMINI_API_KEY for Gemini, or LLM_PROVIDER=ollama for local Ollama."
         )
     return provider, model
+
+
+_UNSUPPORTED_STRUCTURED_OUTPUTS: set[tuple[str, str]] = {
+    ("openrouter", "inclusionai/ling-3.0-flash-fin:free"),
+    ("openrouter", "inclusionai/ling-3.0-flash-sante:free"),
+    ("groq", "openai/gpt-oss-120b"),
+    ("groq", "openai/gpt-oss-20b"),
+    ("groq", "qwen/qwen3.8-27b"),
+}
 
 
 async def _call_provider_async(provider: str, messages: list[dict[str, str]], model: str, *, task: str = "chat", json_mode: bool, timeout: int) -> str:
@@ -106,12 +128,20 @@ async def _call_provider_async(provider: str, messages: list[dict[str, str]], mo
             raise RuntimeError("NVIDIA_API_KEY is not configured in backend/.env")
         base_url = os.environ.get("NVIDIA_BASE_URL", NVIDIA_DEFAULT_BASE_URL).rstrip("/")
         headers["Authorization"] = f"Bearer {api_key}"
+    elif provider == "groq":
+        api_key = os.environ.get("GROQ_API_KEY") or os.environ.get("OPENROUTER_API_KEY")
+        if not api_key:
+            raise RuntimeError("GROQ_API_KEY is not configured in backend/.env")
+        base_url = os.environ.get("GROQ_BASE_URL", GROQ_BASE_URL).rstrip("/")
+        headers["Authorization"] = f"Bearer {api_key}"
     elif provider == "openrouter":
         api_key = os.environ.get("OPENROUTER_API_KEY")
         if not api_key:
             raise RuntimeError("OPENROUTER_API_KEY is not configured in backend/.env")
         base_url = os.environ.get("OPENROUTER_BASE_URL", OPENROUTER_BASE_URL).rstrip("/")
         headers["Authorization"] = f"Bearer {api_key}"
+        headers["HTTP-Referer"] = os.environ.get("OPENROUTER_SITE_URL", "http://localhost:8000")
+        headers["X-Title"] = os.environ.get("OPENROUTER_APP_NAME", "GenQ Analytics")
     elif provider == "gemini":
         api_key = os.environ.get("GEMINI_API_KEY")
         if not api_key:
@@ -123,11 +153,22 @@ async def _call_provider_async(provider: str, messages: list[dict[str, str]], mo
     else:
         raise RuntimeError(f"Unsupported LLM provider: {provider}")
 
+    if task == "analysis":
+        default_max_tok = 512
+    elif task == "domain":
+        default_max_tok = 768
+    elif task in ("review", "audit"):
+        default_max_tok = 1536
+    elif provider == "groq":
+        default_max_tok = 2048
+    else:
+        default_max_tok = 4096
+
     payload: dict[str, Any] = {
         "model": model,
         "messages": messages,
         "temperature": float(os.environ.get("LLM_TEMPERATURE", "0.2")),
-        "max_tokens": 4096,
+        "max_tokens": int(os.environ.get(f"{provider.upper()}_MAX_TOKENS", default_max_tok)),
         "stream": False,
     }
     if provider == "ollama":
@@ -139,7 +180,8 @@ async def _call_provider_async(provider: str, messages: list[dict[str, str]], mo
             num_ctx = int(os.environ.get("LLM_OLLAMA_NUM_CTX_DEFAULT", "8192"))
             payload["options"] = {"num_ctx": num_ctx}
 
-    if json_mode:
+    model_key = (provider, model)
+    if json_mode and model_key not in _UNSUPPORTED_STRUCTURED_OUTPUTS:
         payload["response_format"] = {"type": "json_object"}
 
     logger.info("Sending prompt to %s API (model: %s)...", provider.title(), model)
@@ -151,13 +193,26 @@ async def _call_provider_async(provider: str, messages: list[dict[str, str]], mo
             json=payload,
         )
         if json_mode and response.status_code in {400, 422}:
-            logger.info("%s model rejected response_format; retrying without JSON mode.", provider.title())
+            logger.info("%s model %s rejected response_format; recording as unsupported and retrying without JSON mode.", provider.title(), model)
+            _UNSUPPORTED_STRUCTURED_OUTPUTS.add(model_key)
             payload.pop("response_format", None)
+            await asyncio.sleep(1.5)
             response = await client.post(
                 f"{base_url}/chat/completions",
                 headers=headers,
                 json=payload,
             )
+        elif provider == "openrouter" and response.status_code == 429:
+            fallback_key = os.environ.get("OPENROUTER_FALLBACK_API_KEY")
+            if fallback_key and headers.get("Authorization") != f"Bearer {fallback_key}":
+                logger.info("OpenRouter primary key reached rate limit; seamlessly rotating to fallback key.")
+                headers["Authorization"] = f"Bearer {fallback_key}"
+                await asyncio.sleep(1.0)
+                response = await client.post(
+                    f"{base_url}/chat/completions",
+                    headers=headers,
+                    json=payload,
+                )
         response.raise_for_status()
         data = response.json()
 
@@ -170,8 +225,9 @@ async def _call_provider_async(provider: str, messages: list[dict[str, str]], mo
     if not message or not isinstance(message, dict):
         raise RuntimeError(f"{provider.title()} API response choice has invalid message: {data}")
     content = message.get("content")
-    if content is None:
-        content = ""
+    if not content:
+        # Fallback to reasoning field if content is empty (e.g. reasoning models)
+        content = message.get("reasoning") or ""
     result = str(content).strip()
     if not result:
         raise EmptyLLMResponseError(f"{provider.title()} API returned an empty completion string.")
@@ -207,6 +263,20 @@ async def _retry_with_backoff_async(func, max_retries: int = 2, base_delay: floa
             last_exc = exc
             if attempt < max_retries and _is_transient_error(exc):
                 delay = base_delay * (2 ** attempt)
+                if hasattr(exc, "response") and exc.response is not None:
+                    retry_after = exc.response.headers.get("retry-after")
+                    if retry_after:
+                        try:
+                            delay = max(delay, float(retry_after) + 0.5)
+                        except ValueError:
+                            pass
+                    reset_tokens = exc.response.headers.get("x-ratelimit-reset-tokens")
+                    if reset_tokens:
+                        try:
+                            val = float(str(reset_tokens).rstrip("s"))
+                            delay = max(delay, val + 0.5)
+                        except ValueError:
+                            pass
                 logger.warning("Transient error (attempt %d/%d): %s. Retrying in %.1fs...",
                                attempt + 1, max_retries + 1, exc, delay)
                 await asyncio.sleep(delay)
@@ -223,6 +293,12 @@ async def _call_provider_stream_async(provider: str, messages: list[dict[str, st
         if not api_key:
             raise RuntimeError("NVIDIA_API_KEY is not configured in backend/.env")
         base_url = os.environ.get("NVIDIA_BASE_URL", NVIDIA_DEFAULT_BASE_URL).rstrip("/")
+        headers["Authorization"] = f"Bearer {api_key}"
+    elif provider == "groq":
+        api_key = os.environ.get("GROQ_API_KEY") or os.environ.get("OPENROUTER_API_KEY")
+        if not api_key:
+            raise RuntimeError("GROQ_API_KEY is not configured in backend/.env")
+        base_url = os.environ.get("GROQ_BASE_URL", GROQ_BASE_URL).rstrip("/")
         headers["Authorization"] = f"Bearer {api_key}"
     elif provider == "openrouter":
         api_key = os.environ.get("OPENROUTER_API_KEY")
@@ -241,11 +317,12 @@ async def _call_provider_stream_async(provider: str, messages: list[dict[str, st
     else:
         raise RuntimeError(f"Unsupported LLM provider: {provider}")
 
+    max_tok = 2048 if provider == "groq" else 4096
     payload: dict[str, Any] = {
         "model": model,
         "messages": messages,
         "temperature": float(os.environ.get("LLM_TEMPERATURE", "0.2")),
-        "max_tokens": 4096,
+        "max_tokens": int(os.environ.get(f"{provider.upper()}_MAX_TOKENS", max_tok)),
         "stream": True,
     }
     if provider == "ollama":
@@ -267,6 +344,8 @@ async def _call_provider_stream_async(provider: str, messages: list[dict[str, st
                     chunk = json.loads(line)
                     delta = chunk.get("choices", [{}])[0].get("delta", {})
                     content = delta.get("content", "")
+                    if not content and "reasoning" in delta:
+                        content = delta.get("reasoning", "")
                     if content:
                         yield content
                 except json.JSONDecodeError:

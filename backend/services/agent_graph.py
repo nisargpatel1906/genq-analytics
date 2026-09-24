@@ -4,6 +4,7 @@ import json
 import logging
 import re
 import time
+from datetime import datetime
 import os
 import uuid
 import difflib
@@ -297,7 +298,11 @@ def publish_stage_progress(
         "report_writer": "Report Writer",
         "narrative_stitcher": "Narrative Stitcher",
         "auditor": "Quality Auditor",
-        "validation": "Data Validator"
+        "validation": "Data Validator",
+        "causal_analyst": "Causal Inference Agent",
+        "forecaster": "Forecasting Agent",
+        "anomaly_detector": "Anomaly Detection Agent",
+        "strategic_advisor": "Strategic Insights Agent",
     }
 
     stages_progress = state.setdefault("stages_progress", {})
@@ -312,6 +317,14 @@ def publish_stage_progress(
         update["score"] = score
 
     stages_progress[stage] = update
+
+    # Print real-time stage progress directly to terminal console
+    status_icon = "▶" if status == "running" else ("✔" if status == "completed" else "ℹ")
+    agent_display = stage_names.get(stage, stage.title())
+    score_str = f" [Score: {score}]" if score is not None else ""
+    round_str = f" [Round {round_num}]" if round_num > 0 else ""
+    ts = datetime.now().strftime("%H:%M:%S")
+    print(f"[{ts}] {status_icon} [{agent_display}{round_str}] {detail}{score_str}", flush=True)
 
     callback = state.get("progress_callback")
     if callback:
@@ -2497,6 +2510,12 @@ class AgentGraph:
                 "target_columns_detected": list(self.state.target_columns_detected),
             }
 
+            job_lbl = self.state.job_id or 'anonymous'
+            ts_start = datetime.now().strftime("%H:%M:%S")
+            print(f"\n=======================================================", flush=True)
+            print(f"[{ts_start}] ▶ [Agent Workflow] Starting analysis job {job_lbl}...", flush=True)
+            print(f"=======================================================", flush=True)
+
             final_state = self._compiled_graph.invoke(initial_state)
 
             # Sync updated attributes back to AnalysisState for caller compatibility
@@ -2522,13 +2541,20 @@ class AgentGraph:
 
             if final_state.get("error"):
                 self.state.error = final_state["error"]
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] ❌ [Agent Workflow] Finished with error: {self.state.error}", flush=True)
                 return {"error": self.state.error}
 
+            ts_end = datetime.now().strftime("%H:%M:%S")
+            print(f"=======================================================", flush=True)
+            print(f"[{ts_end}] ✔ [Agent Workflow] Analysis pipeline completed successfully for job {job_lbl}!", flush=True)
+            print(f"=======================================================\n", flush=True)
             return final_state.get("final_report", {})
 
         except JobCancelledException as je:
             logger.info(f"AgentGraph execution cancelled for job {self.state.job_id}: {je}")
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] ⏹ [Agent Workflow] Analysis job {self.state.job_id} cancelled by user.", flush=True)
             return {"error": "Job cancelled by user", "cancelled": True}
         except Exception as e:
             logger.error(f"Error executing LangGraph pipeline: {e}", exc_info=True)
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] ❌ [Agent Workflow] Execution failure: {e}", flush=True)
             return {"error": f"AgentGraph execution failure: {e}"}

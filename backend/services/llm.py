@@ -176,6 +176,8 @@ async def _call_openrouter_async(
         payload["response_format"] = {"type": "json_object"}
 
     masked_key = api_key[:6] + "..." + api_key[-4:] if len(api_key) > 10 else "***"
+    t0 = time.time()
+    print(f"\n[{time.strftime('%H:%M:%S')}] [OpenRouter] -> Task '{task}' calling {model} (Key: {masked_key})...", flush=True)
     logger.info("Sending prompt to OpenRouter API (model: %s, key: %s)...", model, masked_key)
 
     async with httpx.AsyncClient(timeout=timeout) as client:
@@ -193,11 +195,14 @@ async def _call_openrouter_async(
             except Exception:
                 err_msg = response.text[:200]
 
+            print(f"[{time.strftime('%H:%M:%S')}] [OpenRouter] ⚠️ 429 Rate Limit on key {masked_key}: {err_msg}", flush=True)
             logger.warning("OpenRouter returned 429 Too Many Requests: %s", err_msg)
             
             # Rotate key if available
             rotated_key = _rotate_to_next_key()
             if rotated_key:
+                masked_rotated = rotated_key[:6] + "..." + rotated_key[-4:] if len(rotated_key) > 10 else "***"
+                print(f"[{time.strftime('%H:%M:%S')}] [OpenRouter] 🔄 Seamlessly rotating to alternate key: {masked_rotated}...", flush=True)
                 logger.info("Retrying with rotated OpenRouter fallback key...")
                 headers["Authorization"] = f"Bearer {rotated_key}"
                 await asyncio.sleep(1.0)
@@ -213,6 +218,7 @@ async def _call_openrouter_async(
                 err_body = response.json().get("error", {}).get("message", "")
             except Exception:
                 err_body = response.text[:200]
+            print(f"[{time.strftime('%H:%M:%S')}] [OpenRouter] ❌ 429 Rate Limit exhausted across keys.", flush=True)
             raise OpenRouterRateLimitError(
                 f"OpenRouter 429 Rate Limit on model '{model}': {err_body or 'Too Many Requests'}. "
                 f"If using the free tier, consider adding an additional key or rotating keys in backend/.env."
@@ -236,6 +242,9 @@ async def _call_openrouter_async(
     result = str(content).strip()
     if not result:
         raise EmptyLLMResponseError("OpenRouter API returned an empty completion string.")
+
+    elapsed = time.time() - t0
+    print(f"[{time.strftime('%H:%M:%S')}] [OpenRouter] ✅ Task '{task}' completed in {elapsed:.2f}s ({len(result)} chars)", flush=True)
     return result
 
 

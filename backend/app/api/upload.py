@@ -40,6 +40,7 @@ def process_file_task(job_id: str, file_content: bytes, filename: str):
             
         jobs[job_id]["rows"] = len(df)
         jobs[job_id]["columns"] = len(df.columns)
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] 📊 [Ingest] Parsed '{filename}': {len(df):,} rows x {len(df.columns)} columns", flush=True)
 
         # Smart sampling step — notify frontend when dataset is large
         sample_max = 10_000
@@ -136,6 +137,7 @@ def process_file_task(job_id: str, file_content: bytes, filename: str):
         jobs[job_id]["status"] = "Complete"
         jobs[job_id]["report_id"] = report_id
         logger.info(f"Job {job_id}: Process complete. Report generated with ID: {report_id}")
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] 💾 [Report] Successfully saved report {report_id} for job {job_id}", flush=True)
         
     except JobCancelledException:
         logger.info(f"Job {job_id} cancelled during execution.")
@@ -187,6 +189,7 @@ async def upload_dataset(background_tasks: BackgroundTasks, file: UploadFile = F
 
     job_id = f"job_{uuid.uuid4().hex[:8]}"
     logger.info(f"Received file upload: {filename}. Assigned Job ID: {job_id}")
+    print(f"\n[{datetime.now().strftime('%H:%M:%S')}] 📥 [Upload] Received file '{filename}' ({len(content)/1024:.1f} KB) -> Assigned Job ID: {job_id}", flush=True)
     jobs[job_id] = {
         "step": 0,
         "status": "Uploading...",

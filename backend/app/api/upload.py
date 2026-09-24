@@ -121,12 +121,14 @@ def process_file_task(job_id: str, file_content: bytes, filename: str):
         ]
         col_types["binary"] = binary_cols
         
+        stats_dict = dict(ai_report.get("_meta", {}))
+        stats_dict["shape"] = {"rows": len(df), "columns": len(df.columns)}
+
         reports_db[report_id] = sanitize_json({
             "id": report_id,
             "filename": filename,
             "created_at": datetime.now().strftime("%b %d, %Y"),
-            # stats are embedded in ai_report["_meta"] — no need to duplicate them here
-            "stats": ai_report.get("_meta", {}),
+            "stats": stats_dict,
             "report": ai_report,
             "data_sample": sample.to_dict('records'),
             "col_types": col_types,

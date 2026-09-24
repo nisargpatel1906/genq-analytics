@@ -259,6 +259,10 @@ Guidelines for writing code:
 - IMPORTANT: If adding labels to bar plots using `ax.bar_label`, ALWAYS iterate over `ax.containers` (e.g., `for container in ax.containers: ax.bar_label(container)`). DO NOT pass `ax.patches` to `ax.bar_label`, as modern seaborn versions will throw an AttributeError.
 - **NEVER convert currency values**. If the data is in ₹ (INR), all chart labels, annotations, and axis formatting must use ₹. Do NOT convert to $ or USD.
 - **CRITICAL**: Do NOT hardcode large arrays or datasets directly into your Python script. ALWAYS compute the necessary aggregations and plotting data from the loaded `df` DataFrame. Hardcoding large arrays will cause your script to hit token limits and fail with syntax errors.
+- **CRITICAL: Chart Color Palettes & Contrast (NO SOLID BLACK OR DARK COLORMAPS)**:
+  - ALWAYS use bright, professional, high-contrast palettes such as `Blues_d`, `deep`, `muted`, `Set2`, `tab10`, or custom hex lists `['#2563EB', '#3B82F6', '#60A5FA', '#10B981', '#F59E0B', '#8B5CF6']`.
+  - NEVER use sequential colormaps (`rocket`, `flare`, `mako`, `viridis`, `magma`) for bar charts or categorical distributions where the first few categories render as solid pitch black or dark murky ink.
+  - Background must ALWAYS be pure white (`sns.set_theme(style='whitegrid')`), never dark mode.
 - **CRITICAL**: Write the manifest.json at the very END of the script, AFTER all `plt.savefig()` calls are complete. Build the manifest list dynamically as each chart is saved.
 
 ## DATA SAFETY RULES — MANDATORY. VIOLATING THESE WILL PRODUCE BLANK CHARTS.

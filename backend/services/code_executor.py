@@ -16,7 +16,7 @@ logger = logging.getLogger("genq_api.code_executor")
 
 # Modules that the LLM code is allowed to import
 WHITELISTED_MODULES = {
-    "pandas", "numpy", "matplotlib", "seaborn", "scipy", "json", "math",
+    "pandas", "numpy", "matplotlib", "seaborn", "scipy", "sklearn", "json", "math",
     "collections", "itertools", "os", "re", "datetime",
     "base64", "string", "io", "pickle", "warnings", "typing"
 }

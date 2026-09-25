@@ -9,7 +9,11 @@ from dotenv import load_dotenv
 
 logger = logging.getLogger("genq_api.llm")
 
-load_dotenv()
+_backend_env = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
+if os.path.exists(_backend_env):
+    load_dotenv(_backend_env, override=True)
+else:
+    load_dotenv(override=True)
 
 # Exclusive OpenRouter Configuration
 OPENROUTER_DEFAULT_MODEL = "inclusionai/ling-3.0-flash-fin:free"
@@ -64,19 +68,67 @@ def _rotate_to_next_key() -> str | None:
     return new_key
 
 
+NVIDIA_DEFAULT_MODEL = "moonshotai/kimi-k3"
+NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1"
+
+
+def _get_nvidia_api_key() -> str:
+    return os.environ.get("NVIDIA_API_KEY", "").strip()
+
+
+def _normalize_nvidia_model(model_name: str) -> str:
+    """Normalizes model names, handling common build.nvidia.com URL slugs."""
+    name = model_name.strip()
+    # Web catalog URLs often use dashes where the NIM API expects dots
+    name = name.replace("glm-5-3", "glm-5.3")
+    return name
+
+
+def _get_nvidia_candidate_models(primary_model: str) -> list[str]:
+    """Returns the ordered list of candidate models starting with the primary model."""
+    candidates = [_normalize_nvidia_model(primary_model)]
+
+    raw_fallbacks = os.environ.get("NVIDIA_FALLBACK_MODELS", "").strip()
+    if not raw_fallbacks:
+        raw_fallbacks = os.environ.get("NVIDIA_FALLBACK_MODEL", "").strip()
+
+    if raw_fallbacks:
+        for m in raw_fallbacks.split(","):
+            norm = _normalize_nvidia_model(m)
+            if norm and norm not in candidates:
+                candidates.append(norm)
+
+    return candidates
+
+
 def _model_for(task: str = "chat", provider_override: str | None = None) -> str:
-    """Always returns the dedicated inclusionai/ling-3.0-flash-fin:free model."""
+    provider = (provider_override or os.environ.get("LLM_PROVIDER", "openrouter")).lower()
+    if provider == "nvidia":
+        task_key = task.upper()
+        raw_m = (
+            os.environ.get(f"NVIDIA_{task_key}_MODEL")
+            or os.environ.get("NVIDIA_MODEL")
+            or os.environ.get(f"LLM_{task_key}_MODEL")
+            or NVIDIA_DEFAULT_MODEL
+        )
+        return _normalize_nvidia_model(raw_m)
     task_key = task.upper()
-    return os.environ.get(f"OPENROUTER_{task_key}_MODEL") or os.environ.get("OPENROUTER_MODEL") or OPENROUTER_DEFAULT_MODEL
+    return (
+        os.environ.get(f"OPENROUTER_{task_key}_MODEL")
+        or os.environ.get(f"LLM_{task_key}_MODEL")
+        or os.environ.get("OPENROUTER_MODEL")
+        or OPENROUTER_DEFAULT_MODEL
+    )
 
 
 def provider_label(task: str = "chat") -> str:
-    model = _model_for(task)
-    return f"openrouter:{model}"
+    prov, model = _require_model(task)
+    return f"{prov}:{model}"
 
 
 def _require_model(task: str = "chat", provider_override: str | None = None) -> tuple[str, str]:
-    return "openrouter", _model_for(task)
+    provider = (provider_override or os.environ.get("LLM_PROVIDER", "openrouter")).lower()
+    return provider, _model_for(task, provider_override=provider)
 
 
 class EmptyLLMResponseError(Exception):
@@ -292,6 +344,115 @@ async def _call_openrouter_stream_async(messages: list[dict[str, str]], model: s
                     continue
 
 
+async def _call_nvidia_async(
+    messages: list[dict[str, str]],
+    model: str,
+    *,
+    task: str = "chat",
+    json_mode: bool = False,
+    timeout: int = 60,
+) -> str:
+    base_url = os.environ.get("NVIDIA_BASE_URL", NVIDIA_BASE_URL).rstrip("/")
+    api_key = _get_nvidia_api_key()
+    if not api_key:
+        raise RuntimeError("NVIDIA_API_KEY is not configured in backend/.env")
+
+    model = _normalize_nvidia_model(model)
+
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {api_key}",
+        "Accept": "application/json",
+    }
+
+    max_tok = int(os.environ.get("NVIDIA_MAX_TOKENS", "4096"))
+    payload: dict[str, Any] = {
+        "model": model,
+        "messages": messages,
+        "temperature": float(os.environ.get("LLM_TEMPERATURE", "0.2")),
+        "max_tokens": max_tok,
+    }
+
+    masked_key = api_key[:6] + "..." + api_key[-4:] if len(api_key) > 10 else "***"
+    t0 = time.time()
+    print(f"\n[{time.strftime('%H:%M:%S')}] [NVIDIA NIM] -> Task '{task}' calling {model} (Key: {masked_key})...", flush=True)
+    logger.info("Sending prompt to NVIDIA NIM API (model: %s)...", model)
+
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        response = await client.post(
+            f"{base_url}/chat/completions",
+            headers=headers,
+            json=payload,
+        )
+        response.raise_for_status()
+        data = response.json()
+
+    choices = data.get("choices", [])
+    if not choices or not isinstance(choices, list):
+        raise RuntimeError(f"NVIDIA API response has no choices: {data}")
+    message = choices[0].get("message", {})
+    content = message.get("content") or message.get("reasoning_content") or message.get("reasoning") or ""
+    result = str(content).strip()
+    if not result:
+        raise EmptyLLMResponseError("NVIDIA NIM API returned an empty completion string.")
+
+    elapsed = time.time() - t0
+    print(f"[{time.strftime('%H:%M:%S')}] [NVIDIA NIM] ✅ Task '{task}' completed in {elapsed:.2f}s ({len(result)} chars)", flush=True)
+    return result
+
+
+async def _call_nvidia_stream_async(
+    messages: list[dict[str, str]],
+    model: str,
+    *,
+    timeout: int = 60,
+):
+    base_url = os.environ.get("NVIDIA_BASE_URL", NVIDIA_BASE_URL).rstrip("/")
+    api_key = _get_nvidia_api_key()
+    if not api_key:
+        raise RuntimeError("NVIDIA_API_KEY is not configured in backend/.env")
+
+    model = _normalize_nvidia_model(model)
+
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {api_key}",
+        "Accept": "text/event-stream",
+    }
+
+    max_tok = int(os.environ.get("NVIDIA_MAX_TOKENS", "4096"))
+    payload: dict[str, Any] = {
+        "model": model,
+        "messages": messages,
+        "temperature": float(os.environ.get("LLM_TEMPERATURE", "0.2")),
+        "max_tokens": max_tok,
+        "stream": True,
+    }
+
+    logger.info("Streaming from NVIDIA NIM API (model: %s)...", model)
+
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        async with client.stream("POST", f"{base_url}/chat/completions", headers=headers, json=payload) as response:
+            response.raise_for_status()
+            async for line in response.aiter_lines():
+                if not line:
+                    continue
+                if line.startswith("data: "):
+                    line = line[6:]
+                if line.strip() == "[DONE]":
+                    break
+                try:
+                    chunk = json.loads(line)
+                    delta = chunk.get("choices", [{}])[0].get("delta", {})
+                    content = delta.get("content", "")
+                    if not content:
+                        content = delta.get("reasoning_content") or delta.get("reasoning") or ""
+                    if content:
+                        yield content
+                except json.JSONDecodeError:
+                    continue
+
+
 async def chat_completion_stream(
     messages: list[dict[str, str]],
     *,
@@ -299,9 +460,35 @@ async def chat_completion_stream(
     timeout: int = 300,
     provider: str | None = None,
 ):
-    model = _model_for(task)
-    async for chunk in _call_openrouter_stream_async(messages, model, timeout=timeout):
-        yield chunk
+    prov, model = _require_model(task, provider_override=provider)
+    if prov == "nvidia":
+        candidates = _get_nvidia_candidate_models(model)
+        nvidia_timeout = int(os.environ.get("NVIDIA_TIMEOUT", str(timeout)))
+        fallback_timeout = int(os.environ.get("NVIDIA_FALLBACK_TIMEOUT", "300"))
+
+        stream_started = False
+        for idx, candidate in enumerate(candidates):
+            cur_timeout = nvidia_timeout if idx == 0 else fallback_timeout
+            try:
+                async for chunk in _call_nvidia_stream_async(messages, candidate, timeout=cur_timeout):
+                    stream_started = True
+                    yield chunk
+                if stream_started:
+                    return
+            except Exception as stream_err:
+                logger.warning("[NVIDIA NIM] Streaming error with model '%s': %s", candidate, stream_err)
+                if stream_started:
+                    return
+
+        # Fallback to OpenRouter stream if configured
+        fallback_provider = os.environ.get("LLM_FALLBACK_PROVIDER", "").strip().lower()
+        if fallback_provider == "openrouter":
+            fb_model = _model_for(task, provider_override="openrouter")
+            async for chunk in _call_openrouter_stream_async(messages, fb_model, timeout=timeout):
+                yield chunk
+    else:
+        async for chunk in _call_openrouter_stream_async(messages, model, timeout=timeout):
+            yield chunk
 
 
 async def chat_completion_async(
@@ -312,7 +499,70 @@ async def chat_completion_async(
     timeout: int = 300,
     provider: str | None = None,
 ) -> str:
-    model = _model_for(task)
+    prov, model = _require_model(task, provider_override=provider)
+
+    if prov == "nvidia":
+        candidates = _get_nvidia_candidate_models(model)
+        nvidia_timeout = int(os.environ.get("NVIDIA_TIMEOUT", str(timeout)))
+        fallback_timeout = int(os.environ.get("NVIDIA_FALLBACK_TIMEOUT", "300"))
+
+        last_error = None
+        for idx, candidate in enumerate(candidates):
+            is_primary = (idx == 0)
+            cur_timeout = nvidia_timeout if is_primary else fallback_timeout
+
+            if not is_primary:
+                print(
+                    f"[{time.strftime('%H:%M:%S')}] [NVIDIA NIM] 🔄 Fallback ({idx}/{len(candidates)-1}) -> Attempting model '{candidate}' (Timeout: {cur_timeout}s)...",
+                    flush=True,
+                )
+                logger.info("[NVIDIA NIM] Cascading fallback (%d/%d) to model '%s'...", idx, len(candidates) - 1, candidate)
+
+            try:
+                result = await _call_nvidia_async(
+                    messages, candidate, task=task, json_mode=json_mode, timeout=cur_timeout
+                )
+                if not is_primary:
+                    print(
+                        f"[{time.strftime('%H:%M:%S')}] [NVIDIA NIM] ✅ Fallback model '{candidate}' succeeded for task '{task}'!",
+                        flush=True,
+                    )
+                return result
+            except Exception as n_err:
+                last_error = n_err
+                err_detail = str(n_err) or f"Read timed out after {cur_timeout}s with 0 bytes received"
+                err_desc = f"{type(n_err).__name__}: {err_detail}"
+                logger.warning(
+                    "[NVIDIA NIM] Candidate '%s' failed: %s", candidate, err_desc
+                )
+                print(
+                    f"[{time.strftime('%H:%M:%S')}] [NVIDIA NIM] ⚠️ Model '{candidate}' failed: {err_desc}",
+                    flush=True,
+                )
+                continue
+
+        # If all NVIDIA candidate models failed, check if OpenRouter fallback is permitted
+        fallback_provider = os.environ.get("LLM_FALLBACK_PROVIDER", "").strip().lower()
+        if fallback_provider == "openrouter":
+            print(
+                f"[{time.strftime('%H:%M:%S')}] [NVIDIA NIM] ⚠️ All configured NVIDIA NIM models exhausted ({candidates}). Falling back to OpenRouter...",
+                flush=True,
+            )
+            fb_model = _model_for(task, provider_override="openrouter")
+            return await _retry_with_backoff_async(
+                lambda: _call_openrouter_async(messages, fb_model, task=task, json_mode=json_mode, timeout=timeout),
+                max_retries=5,
+                base_delay=6.0,
+            )
+
+        # If fallback exhausted and no alternate provider, raise informative error
+        if last_error:
+            if not str(last_error):
+                raise RuntimeError(
+                    f"All configured NVIDIA NIM models {candidates} timed out with 0 bytes received from NVIDIA cloud workers."
+                ) from last_error
+            raise last_error
+
     return await _retry_with_backoff_async(
         lambda: _call_openrouter_async(messages, model, task=task, json_mode=json_mode, timeout=timeout),
         max_retries=5,

@@ -60,6 +60,13 @@ def clean_inline_markdown(text: str) -> str:
     # 7. Convert links [text](url) -> <u>text</u>
     text = re.sub(r"\[([^\]]+)\]\([^\)]+\)", r"<u>\1</u>", text)
 
+    # 8. Balance unclosed XML tags
+    for tag in ("b", "i", "u", "font"):
+        open_count = text.count(f"<{tag}")
+        close_count = text.count(f"</{tag}>")
+        if open_count > close_count:
+            text += f"</{tag}>" * (open_count - close_count)
+
     return text
 
 
@@ -94,6 +101,8 @@ def parse_markdown_to_flowables(
                     continue
                 bullet_content = re.sub(r"^\s*[\-\*\•]\s+", "", line)
                 cleaned = clean_inline_markdown(bullet_content)
+                if cleaned and not cleaned.endswith((".", "!", "?", ":", ";", '"', "'", ">", "</font>", "</b>", "</i>")):
+                    cleaned += "."
                 flowables.append(Paragraph(f"&bull; {cleaned}", bullet_style))
                 flowables.append(Spacer(1, 2))
             flowables.append(Spacer(1, 4))
@@ -109,6 +118,8 @@ def parse_markdown_to_flowables(
             # Regular paragraph
             cleaned_lines = [clean_inline_markdown(l.strip()) for l in lines if l.strip()]
             cleaned = " ".join(cleaned_lines)
+            if cleaned and not cleaned.endswith((".", "!", "?", ":", ";", '"', "'", ">", "</font>", "</b>", "</i>")):
+                cleaned += "."
             flowables.append(Paragraph(cleaned, body_style))
             flowables.append(Spacer(1, 6))
 
@@ -258,6 +269,315 @@ def _render_dynamic_sections(
         section_num += 1
 
     return True
+
+
+def _render_cleaning_manifest(story, manifest: dict, h1, h2, body, bullet, callout):
+    """Renders the Data Quality Engineer cleaning audit manifest into the PDF story."""
+    actions = manifest.get("actions", [])
+    if not actions and not manifest.get("summary"):
+        return
+
+    story += [
+        Paragraph("Data Quality & Cleaning Audit", h1),
+        HRFlowable(width="100%", thickness=0.5, color=BRAND_BORDER),
+        Spacer(1, 8),
+    ]
+
+    summary_text = manifest.get("summary") or (
+        f"Data quality audit completed: {manifest.get('rows_before', '?')} initial rows, "
+        f"{manifest.get('duplicates_removed', 0)} duplicates removed, "
+        f"{len(manifest.get('cleaned_columns', []))} column(s) standardized."
+    )
+    story.append(Paragraph(f"<b>Audit Summary:</b> {clean_inline_markdown(summary_text)}", callout))
+    story.append(Spacer(1, 8))
+
+    if actions:
+        headers = [
+            Paragraph("<b>Target Column</b>", ParagraphStyle("TH", parent=body, textColor=colors.white)),
+            Paragraph("<b>Operation</b>", ParagraphStyle("TH", parent=body, textColor=colors.white)),
+            Paragraph("<b>Remediation Detail</b>", ParagraphStyle("TH", parent=body, textColor=colors.white)),
+            Paragraph("<b>Rows</b>", ParagraphStyle("TH", parent=body, textColor=colors.white, alignment=1)),
+        ]
+        rows = [headers]
+        for act in actions[:10]:
+            col = clean_inline_markdown(str(act.get("column", "all")))
+            op = clean_inline_markdown(str(act.get("operation", "standardization")).replace("_", " ").title())
+            reason = clean_inline_markdown(str(act.get("reason", "")))
+            affected = str(act.get("rows_affected", "-"))
+            rows.append([
+                Paragraph(col, body),
+                Paragraph(op, body),
+                Paragraph(reason, body),
+                Paragraph(affected, ParagraphStyle("C", parent=body, alignment=1)),
+            ])
+
+        t = Table(rows, colWidths=[1.4 * inch, 1.4 * inch, 3.1 * inch, 0.7 * inch])
+        t.setStyle(TableStyle([
+            ("BACKGROUND",    (0, 0), (-1, 0),  BRAND_PRIMARY),
+            ("TEXTCOLOR",     (0, 0), (-1, 0),  colors.white),
+            ("FONTNAME",      (0, 0), (-1, 0),  "Helvetica-Bold"),
+            ("FONTSIZE",      (0, 0), (-1, -1), 8.5),
+            ("TOPPADDING",    (0, 0), (-1, -1), 5),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+            ("GRID",          (0, 0), (-1, -1), 0.5, BRAND_BORDER),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, BRAND_BG_ALT]),
+        ]))
+        story.append(t)
+        story.append(Spacer(1, 14))
+
+
+def _render_hypotheses_plan(story, plan: dict, h1, h2, body, bullet, callout):
+    """Renders the Lead Quantitative Research Director hypotheses into the PDF story."""
+    hypotheses = plan.get("hypotheses", [])
+    if not hypotheses:
+        return
+
+    story += [
+        Paragraph("Empirical Research Hypotheses", h1),
+        HRFlowable(width="100%", thickness=0.5, color=BRAND_BORDER),
+        Spacer(1, 8),
+    ]
+
+    obj = plan.get("business_objective", "")
+    if obj:
+        story.append(Paragraph(f"<b>Strategic Research Objective:</b> {clean_inline_markdown(obj)}", callout))
+        story.append(Spacer(1, 8))
+
+    for h in hypotheses:
+        h_id = clean_inline_markdown(str(h.get("id", "H")))
+        stmt = clean_inline_markdown(str(h.get("statement", "")))
+        vars_str = clean_inline_markdown(", ".join(h.get("target_variables", [])))
+        impact = clean_inline_markdown(str(h.get("business_impact", "")))
+
+        story.append(Paragraph(f"<b>[{h_id}] {stmt}</b>", h2))
+        if vars_str:
+            story.append(Paragraph(f"&bull; <b>Evaluated Variables:</b> {vars_str}", bullet))
+        if impact:
+            story.append(Paragraph(f"&bull; <b>Operational Impact:</b> {impact}", bullet))
+        story.append(Spacer(1, 4))
+    story.append(Spacer(1, 10))
+
+
+def _render_ml_predictive_modeling(story, ml_results: dict, h1, h2, body, bullet, callout):
+    """Renders the Senior ML Engineer predictive modeling and feature importances into the PDF story."""
+    feat_imps = ml_results.get("feature_importances", [])
+    if not feat_imps:
+        return
+
+    story += [
+        Paragraph("Predictive Modeling & Key Drivers", h1),
+        HRFlowable(width="100%", thickness=0.5, color=BRAND_BORDER),
+        Spacer(1, 8),
+    ]
+
+    summary = ml_results.get("summary", "")
+    if summary:
+        story.append(Paragraph(f"<b>Model Performance:</b> {clean_inline_markdown(summary)}", callout))
+        story.append(Spacer(1, 8))
+
+    headers = [
+        Paragraph("<b>Rank</b>", ParagraphStyle("TH", parent=body, textColor=colors.white, alignment=1)),
+        Paragraph("<b>Predictive Feature</b>", ParagraphStyle("TH", parent=body, textColor=colors.white)),
+        Paragraph("<b>Importance Score</b>", ParagraphStyle("TH", parent=body, textColor=colors.white, alignment=1)),
+        Paragraph("<b>Impact Role</b>", ParagraphStyle("TH", parent=body, textColor=colors.white)),
+    ]
+    rows = [headers]
+    for idx, item in enumerate(feat_imps[:8], 1):
+        feat = clean_inline_markdown(str(item.get("feature", "")))
+        score = item.get("importance", 0.0)
+        score_str = f"{score:.4f}" if isinstance(score, (int, float)) else str(score)
+        role = "Primary Driver" if idx == 1 else ("Secondary Driver" if idx <= 3 else "Contributing Factor")
+        rows.append([
+            Paragraph(str(idx), ParagraphStyle("C", parent=body, alignment=1)),
+            Paragraph(feat, body),
+            Paragraph(score_str, ParagraphStyle("C", parent=body, alignment=1)),
+            Paragraph(role, body),
+        ])
+
+    t = Table(rows, colWidths=[0.8 * inch, 2.5 * inch, 1.5 * inch, 1.8 * inch])
+    t.setStyle(TableStyle([
+        ("BACKGROUND",    (0, 0), (-1, 0),  BRAND_PRIMARY),
+        ("TEXTCOLOR",     (0, 0), (-1, 0),  colors.white),
+        ("FONTNAME",      (0, 0), (-1, 0),  "Helvetica-Bold"),
+        ("FONTSIZE",      (0, 0), (-1, -1), 8.5),
+        ("TOPPADDING",    (0, 0), (-1, -1), 5),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+        ("GRID",          (0, 0), (-1, -1), 0.5, BRAND_BORDER),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, BRAND_BG_ALT]),
+    ]))
+    story.append(t)
+    story.append(Spacer(1, 14))
+
+
+def _render_relational_schema(story, manifest: dict, h1, h2, body, bullet, callout):
+    """Renders the Multi-Source Relational Architecture, joined tables, and SQL query."""
+    if not manifest:
+        return
+
+    tables = manifest.get("tables", [])
+    sql_query = manifest.get("sql_query", "")
+    row_count = manifest.get("row_count", 0)
+
+    if not tables and not sql_query:
+        return
+
+    story += [
+        Paragraph("Multi-Source Relational Architecture & Lineage", h1),
+        HRFlowable(width="100%", thickness=0.5, color=BRAND_BORDER),
+        Spacer(1, 8),
+    ]
+
+    summary_text = (
+        f"Relational federation united {len(tables)} table(s) into an analytical dataset of "
+        f"{row_count:,} unified records using autonomous key inference and relational joining."
+    )
+    story.append(Paragraph(f"<b>Lineage Summary:</b> {clean_inline_markdown(summary_text)}", callout))
+    story.append(Spacer(1, 8))
+
+    if tables:
+        headers = [
+            Paragraph("<b>Entity / Table</b>", ParagraphStyle("TH", parent=body, textColor=colors.white)),
+            Paragraph("<b>Record Count</b>", ParagraphStyle("TH", parent=body, textColor=colors.white, alignment=1)),
+            Paragraph("<b>Identified Primary / Foreign Keys</b>", ParagraphStyle("TH", parent=body, textColor=colors.white)),
+        ]
+        rows = [headers]
+        for tbl in tables:
+            t_name = clean_inline_markdown(str(tbl.get("table_name", tbl.get("name", "Table"))))
+            cnt = tbl.get("row_count", tbl.get("rows", "-"))
+            t_rows = f"{cnt:,}" if isinstance(cnt, (int, float)) else str(cnt)
+            raw_keys = tbl.get("candidate_keys", tbl.get("keys", []))
+            t_keys = clean_inline_markdown(", ".join(raw_keys) if raw_keys else "Inferred by schema linker")
+            rows.append([
+                Paragraph(t_name, body),
+                Paragraph(t_rows, ParagraphStyle("C", parent=body, alignment=1)),
+                Paragraph(t_keys, body),
+            ])
+
+        t = Table(rows, colWidths=[2.2 * inch, 1.4 * inch, 3.0 * inch])
+        t.setStyle(TableStyle([
+            ("BACKGROUND",    (0, 0), (-1, 0),  BRAND_PRIMARY),
+            ("TEXTCOLOR",     (0, 0), (-1, 0),  colors.white),
+            ("FONTNAME",      (0, 0), (-1, 0),  "Helvetica-Bold"),
+            ("FONTSIZE",      (0, 0), (-1, -1), 8.5),
+            ("TOPPADDING",    (0, 0), (-1, -1), 5),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+            ("GRID",          (0, 0), (-1, -1), 0.5, BRAND_BORDER),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, BRAND_BG_ALT]),
+        ]))
+        story.append(t)
+        story.append(Spacer(1, 10))
+
+    if sql_query:
+        story.append(Paragraph("<b>Materialized Relational SQL Execution:</b>", h2))
+        clean_sql = clean_inline_markdown(sql_query)
+        sql_style = ParagraphStyle(
+            "SQLCode",
+            parent=body,
+            fontName="Courier",
+            fontSize=8,
+            leading=11,
+            textColor=colors.HexColor("#1E293B"),
+            backColor=colors.HexColor("#F1F5F9"),
+            borderColor=colors.HexColor("#CBD5E1"),
+            borderWidth=0.5,
+            borderPadding=6,
+            spaceAfter=8,
+        )
+        story.append(Paragraph(f"<pre>{clean_sql}</pre>", sql_style))
+        story.append(Spacer(1, 10))
+
+
+def _render_experimentation_results(story, exp_results: dict, h1, h2, body, bullet, callout):
+    """Renders A/B testing analysis, SRM verification, lift confidence intervals, and rollout decision."""
+    if not exp_results or not exp_results.get("is_experiment"):
+        return
+
+    story += [
+        Paragraph("A/B Testing & Controlled Experimentation Analysis", h1),
+        HRFlowable(width="100%", thickness=0.5, color=BRAND_BORDER),
+        Spacer(1, 8),
+    ]
+
+    decision = exp_results.get("rollout_decision", "INCONCLUSIVE")
+    rec = exp_results.get("recommendation", "")
+    target_metric = clean_inline_markdown(exp_results.get("primary_metric", "Target Metric"))
+
+    if "SHIP" in decision and "DO NOT" not in decision:
+        badge_bg = colors.HexColor("#DCFCE7")
+        badge_border = colors.HexColor("#86EFAC")
+        badge_color = colors.HexColor("#15803D")
+    elif "DO NOT SHIP" in decision:
+        badge_bg = colors.HexColor("#FEE2E2")
+        badge_border = colors.HexColor("#FCA5A5")
+        badge_color = colors.HexColor("#B91C1C")
+    else:
+        badge_bg = colors.HexColor("#FEF3C7")
+        badge_border = colors.HexColor("#FCD34D")
+        badge_color = colors.HexColor("#B45309")
+
+    decision_style = ParagraphStyle(
+        "DecisionCallout",
+        parent=callout,
+        backColor=badge_bg,
+        borderColor=badge_border,
+        borderWidth=1,
+        borderPadding=8,
+        textColor=badge_color,
+        spaceAfter=8,
+    )
+
+    story.append(Paragraph(
+        f"<b>ROLLOUT DECISION: {clean_inline_markdown(decision)}</b><br/>"
+        f"<b>Primary Hypothesis Evaluation:</b> {clean_inline_markdown(rec)}",
+        decision_style
+    ))
+    story.append(Spacer(1, 8))
+
+    # SRM check status
+    srm = exp_results.get("srm_check", {})
+    srm_passed = srm.get("passed", True)
+    srm_status_text = "<b>PASSED</b> (No Sample Ratio Mismatch)" if srm_passed else "<b>WARNING: SRM VIOLATION DETECTED</b> (Allocation bias detected)"
+    srm_p = srm.get("p_value", 1.0)
+    story.append(Paragraph(f"&bull; <b>Sample Ratio Mismatch (SRM) Integrity:</b> {srm_status_text} [Chi-Square p={srm_p:.4f}]", bullet))
+
+    lift = exp_results.get("lift_analysis", {})
+    if lift:
+        c_mean = lift.get("control_mean", 0.0)
+        t_mean = lift.get("treatment_mean", 0.0)
+        rel_lift = lift.get("relative_lift_pct", 0.0)
+        p_val = lift.get("p_value", 1.0)
+        ci = lift.get("confidence_interval_95", [0.0, 0.0])
+        sig = "Yes (p &lt; 0.05)" if lift.get("statistically_significant") else "No (p &ge; 0.05)"
+
+        headers = [
+            Paragraph("<b>Target Metric</b>", ParagraphStyle("TH", parent=body, textColor=colors.white)),
+            Paragraph("<b>Control Mean</b>", ParagraphStyle("TH", parent=body, textColor=colors.white, alignment=1)),
+            Paragraph("<b>Treatment Mean</b>", ParagraphStyle("TH", parent=body, textColor=colors.white, alignment=1)),
+            Paragraph("<b>Relative Lift</b>", ParagraphStyle("TH", parent=body, textColor=colors.white, alignment=1)),
+            Paragraph("<b>95% CI</b>", ParagraphStyle("TH", parent=body, textColor=colors.white, alignment=1)),
+            Paragraph("<b>Stat. Sig.</b>", ParagraphStyle("TH", parent=body, textColor=colors.white, alignment=1)),
+        ]
+        row_data = [
+            Paragraph(target_metric, body),
+            Paragraph(f"{c_mean:.4f}", ParagraphStyle("C", parent=body, alignment=1)),
+            Paragraph(f"{t_mean:.4f}", ParagraphStyle("C", parent=body, alignment=1)),
+            Paragraph(f"{rel_lift:+.2f}%", ParagraphStyle("C", parent=body, alignment=1, textColor=badge_color)),
+            Paragraph(f"[{ci[0]:.4f}, {ci[1]:.4f}]", ParagraphStyle("C", parent=body, alignment=1)),
+            Paragraph(sig, ParagraphStyle("C", parent=body, alignment=1)),
+        ]
+        t = Table([headers, row_data], colWidths=[1.8 * inch, 0.9 * inch, 0.9 * inch, 0.9 * inch, 1.4 * inch, 0.7 * inch])
+        t.setStyle(TableStyle([
+            ("BACKGROUND",    (0, 0), (-1, 0),  BRAND_PRIMARY),
+            ("TEXTCOLOR",     (0, 0), (-1, 0),  colors.white),
+            ("FONTNAME",      (0, 0), (-1, 0),  "Helvetica-Bold"),
+            ("FONTSIZE",      (0, 0), (-1, -1), 8.5),
+            ("TOPPADDING",    (0, 0), (-1, -1), 5),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+            ("GRID",          (0, 0), (-1, -1), 0.5, BRAND_BORDER),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white]),
+        ]))
+        story.append(t)
+        story.append(Spacer(1, 14))
 
 
 def generate_pdf_response(report_id: str, report_data: dict) -> FileResponse:
@@ -561,6 +881,21 @@ def generate_pdf_response(report_id: str, report_data: dict) -> FileResponse:
         story.extend(parse_markdown_to_flowables(exec_sum, body, h2, bullet))
         story.append(Spacer(1, 14))
 
+    # ── Relational Multi-Source Architecture & Lineage ─────────────────────────
+    relational_manifest = ai_report.get("relational_manifest", {}) or report_data.get("relational_manifest", {})
+    if relational_manifest:
+        _render_relational_schema(story, relational_manifest, h1, h2, body, bullet, callout)
+
+    # ── Data Quality & Cleaning Audit (Data Cleaner Agent) ──────────────────────
+    cleaning_manifest = ai_report.get("data_cleaning_manifest", {}) or report_data.get("data_cleaning_manifest", {})
+    if cleaning_manifest:
+        _render_cleaning_manifest(story, cleaning_manifest, h1, h2, body, bullet, callout)
+
+    # ── Empirical Research Hypotheses (Research Director Agent) ─────────────────
+    investigation_plan = ai_report.get("investigation_plan", {}) or report_data.get("investigation_plan", {})
+    if investigation_plan:
+        _render_hypotheses_plan(story, investigation_plan, h1, h2, body, bullet, callout)
+
     # ── Build Charts ────────────────────────────────────────────────────────────
     charts_list = build_charts(report_data)
 
@@ -568,6 +903,16 @@ def generate_pdf_response(report_id: str, report_data: dict) -> FileResponse:
     used_dynamic = _render_dynamic_sections(
         story, ai_report, stats, charts_list, h1, h2, body, bullet, caption, callout
     )
+
+    # ── Predictive Machine Learning & Key Drivers (ML Modeler Agent) ───────────
+    ml_results = ai_report.get("ml_predictive_modeling", {}) or report_data.get("ml_predictive_modeling", {})
+    if ml_results:
+        _render_ml_predictive_modeling(story, ml_results, h1, h2, body, bullet, callout)
+
+    # ── A/B Testing & Controlled Experimentation ────────────────────────────────
+    experiment_results = ai_report.get("experiment_results", {}) or report_data.get("experiment_results", {})
+    if experiment_results:
+        _render_experimentation_results(story, experiment_results, h1, h2, body, bullet, callout)
 
     if used_dynamic:
         if charts_list:

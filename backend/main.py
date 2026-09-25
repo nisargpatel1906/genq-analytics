@@ -4,7 +4,7 @@ import sys
 from fastapi import FastAPI, Request, Header, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 import time
-from app.api import upload, reports, export_routes, chat
+from app.api import upload, reports, export_routes, chat, monitor_routes
 
 # Ensure standard output uses utf-8 encoding on Windows to prevent StreamHandler UnicodeEncodeErrors
 if sys.stdout.encoding.lower() != 'utf-8':
@@ -53,6 +53,7 @@ app.include_router(upload.router, prefix="/api", dependencies=[Depends(verify_ap
 app.include_router(reports.router, prefix="/api", dependencies=[Depends(verify_api_key)])
 app.include_router(export_routes.router, prefix="/api", dependencies=[Depends(verify_api_key)])
 app.include_router(chat.router, prefix="/api", dependencies=[Depends(verify_api_key)])
+app.include_router(monitor_routes.router, prefix="/api", dependencies=[Depends(verify_api_key)])
 
 @app.get("/")
 def read_root():

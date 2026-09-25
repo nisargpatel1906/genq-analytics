@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Sparkles, Send, MessageSquare, X, Loader2, Bot, User, FileText, AlertTriangle, Target, ShieldCheck, CheckCircle2, RefreshCw, Clock, GitBranch, TrendingUp, Users, Zap } from 'lucide-react';
+import { Sparkles, Send, MessageSquare, X, Loader2, Bot, User, FileText, AlertTriangle, Target, ShieldCheck, CheckCircle2, RefreshCw } from 'lucide-react';
 import { Button } from '../components/ui/Button';
 import { Badge } from '../components/ui/Badge';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -7,6 +7,7 @@ import { useSearchParams, useNavigate } from 'react-router-dom';
 import { API_URL, apiHeaders } from '../lib/api';
 import { useAnalysisStore } from '../store/useAnalysisStore';
 import type { ChatMsg } from '../store/useAnalysisStore';
+import { AgentPipelineTracker } from '../components/AgentPipelineTracker';
 
 // ─── Quick-prompt suggestions ─────────────────────────────────────────────────
 const SUGGESTIONS = [
@@ -209,75 +210,31 @@ export function Dashboard() {
     currentReportCharts: charts,
     isReportLoading: loading,
     loadReport,
-    jobStatus,
-    setJobStatus,
-    agentProgress,
-    setAgentProgress,
-    auditScore,
-    setAuditScore,
-    jobError,
-    setJobError,
   } = useAnalysisStore();
 
   const workflow = reportData?.report?._meta?.agentWorkflow;
 
-  // Poll job status when coming from Upload
+  // If coming directly with a completed jobId or reportId, load it
   useEffect(() => {
-    if (!jobId) return;
-
-    let active = true;
-    let delay = 3000;
-
-    const poll = async () => {
-      if (!active) return;
-      try {
-        const res = await fetch(`${API_URL}/api/jobs/${jobId}/status`, { headers: apiHeaders() });
-        const data = await res.json();
-
-        if (!active) return;
-
-        if (data.error || data.status === 'Failed') {
-          setJobError(data.error || 'Analysis failed.');
-          return;
-        }
-
-        setJobStatus(data);
-        if (Array.isArray(data.agent_progress)) setAgentProgress(data.agent_progress);
-        if (typeof data.audit_score === 'number') setAuditScore(data.audit_score);
-
-        if (data.step === 4 && data.status === 'Complete') {
+    if (!jobId || reportData) return;
+    fetch(`${API_URL}/api/jobs/${jobId}/status`, { headers: apiHeaders() })
+      .then(r => r.json())
+      .then(data => {
+        if (data.status === 'Complete' && data.report_id) {
           setReportId(data.report_id);
-          setJobStatus(null);
-          loadReport(data.report_id).then(() => {
-            setChatOpen(true);
-          });
-          return;
+          loadReport(data.report_id).then(() => setChatOpen(true));
         }
-
-        delay = Math.min(delay * 1.5, 15000);
-        setTimeout(poll, delay);
-      } catch {
-        if (active) {
-          setJobError('Connection lost.');
-        }
-      }
-    };
-
-    const timerId = setTimeout(poll, delay);
-
-    return () => {
-      active = false;
-      clearTimeout(timerId);
-    };
-  }, [jobId, loadReport, setAgentProgress, setAuditScore, setJobError, setJobStatus]);
+      })
+      .catch(() => {});
+  }, [jobId, reportData, loadReport]);
 
   useEffect(() => {
-    if (reportId && !jobId) {
+    if (reportId && !reportData) {
       loadReport(reportId).then(() => {
         setChatOpen(true);
       });
     }
-  }, [reportId, jobId, loadReport]);
+  }, [reportId, reportData, loadReport]);
 
   return (
     <div className="flex flex-col w-full h-[calc(100vh-56px)] overflow-hidden bg-bg">
@@ -322,121 +279,25 @@ export function Dashboard() {
             )}
           </div>
 
-          {/* ── Live Progress Panel (when job is running) ──────────────────── */}
-          {jobStatus && !reportData && (
-            <section className="mb-8 bg-surface border border-border rounded-2xl overflow-hidden shadow-sm">
-              {/* Header */}
-              <div className="p-5 border-b border-border flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  {jobStatus.status === 'Complete' ? (
-                    <CheckCircle2 className="w-5 h-5 text-success" />
-                  ) : jobStatus.error ? (
-                    <AlertTriangle className="w-5 h-5 text-error" />
-                  ) : (
-                    <Loader2 className="w-5 h-5 text-accent animate-spin" />
-                  )}
-                  <div>
-                    <h2 className="font-body font-semibold text-[15px] text-fg">
-                      {jobStatus.status || 'Analyzing...'}
-                    </h2>
-                    {jobStatus.rows && jobStatus.columns && (
-                      <p className="font-body text-[12px] text-fg/50 mt-0.5">
-                        {jobStatus.rows.toLocaleString()} rows · {jobStatus.columns} columns
-                      </p>
-                    )}
-                  </div>
-                </div>
-                <div className="flex items-center gap-3">
-                  {auditScore !== null && (
-                    <Badge variant={auditScore >= 85 ? 'success' : 'warning'}>
-                      Audit {auditScore}/100
-                    </Badge>
-                  )}
-                  {jobStatus.regeneration_round !== undefined && jobStatus.regeneration_round > 0 && (
-                    <span className="font-body text-[11px] text-fg/50 flex items-center gap-1.5">
-                      <RefreshCw className="w-3.5 h-3.5" />
-                      Retry {jobStatus.regeneration_round}/3
-                    </span>
-                  )}
-                </div>
-              </div>
-
-              {/* Agent Progress List */}
-              {agentProgress.length > 0 && (
-                <div className="px-5 py-3 border-b border-border bg-bg/30">
-                  {agentProgress.map((agent) => (
-                    <div key={agent.id} className="py-3 border-b border-border/50 last:border-0 flex gap-3">
-                      <div className="mt-0.5 flex-shrink-0">
-                        {agent.status === 'running' ? (
-                          agent.round > 0 ? <RefreshCw className="w-4 h-4 text-warning animate-spin" /> : <Loader2 className="w-4 h-4 text-accent animate-spin" />
-                        ) : agent.id === 'audit' ? (
-                          <ShieldCheck className="w-4 h-4 text-success" />
-                        ) : agent.id === 'causal_analyst' ? (
-                          <GitBranch className="w-4 h-4 text-violet-500" />
-                        ) : agent.id === 'forecaster' ? (
-                          <TrendingUp className="w-4 h-4 text-teal-500" />
-                        ) : agent.id === 'anomaly_detector' ? (
-                          <Users className="w-4 h-4 text-blue-500" />
-                        ) : agent.id === 'strategic_advisor' ? (
-                          <Zap className="w-4 h-4 text-amber-500" />
-                        ) : (
-                          <CheckCircle2 className="w-4 h-4 text-success" />
-                        )}
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center justify-between gap-3">
-                          <h4 className="font-body font-medium text-[13px] text-fg">{agent.name}</h4>
-                          <span className="font-body text-[10px] text-fg/50 flex-shrink-0">
-                            {agent.score !== undefined ? `${agent.score}/100` : agent.round > 0 ? `Retry ${agent.round}/3` : agent.status}
-                          </span>
-                        </div>
-                        <p className="font-body text-[11px] text-fg/60 mt-1 leading-relaxed">{agent.detail}</p>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {/* Error state */}
-              {jobError && (
-                <div className="p-5 bg-error/5 border-t border-error/20">
-                  <div className="flex items-center gap-2 text-error">
-                    <AlertTriangle className="w-4 h-4" />
-                    <p className="font-body text-[13px]">{jobError}</p>
-                  </div>
-                </div>
-              )}
-
-              {/* Step indicators */}
-              <div className="px-5 py-4">
-                {[
-                  { step: 1, label: 'Mapping Schema', desc: 'Ingesting data and analyzing structures...' },
-                  { step: 2, label: 'Detecting Patterns', desc: 'Running statistical investigation...' },
-                  { step: 3, label: 'Senior Analysis', desc: 'Causal inference, forecasting, anomalies, strategy...' },
-                  { step: 4, label: 'Preparing Visuals', desc: 'Building charts and insights...' },
-                  { step: 5, label: 'Complete', desc: 'Report ready' },
-                ].map(({ step, label, desc }) => (
-                  <div key={step} className="py-3 border-b border-border/50 last:border-0 flex gap-4">
-                    <div className="mt-0.5">
-                      {(jobStatus?.step || 0) < step ? (
-                        <Clock className="w-4 h-4 text-fg/20" />
-                      ) : (jobStatus?.step || 0) === step && !jobStatus?.error ? (
-                        <Loader2 className="w-4 h-4 text-accent animate-spin" />
-                      ) : (
-                        <CheckCircle2 className="w-4 h-4 text-success" />
-                      )}
-                    </div>
-                    <div className="flex-1">
-                      <h4 className={`font-body font-medium text-[13px] ${(jobStatus?.step || 0) < step ? 'text-fg/40' : 'text-fg'}`}>
-                        {label}
-                      </h4>
-                      <p className={`font-body text-[11px] ${(jobStatus?.step || 0) < step ? 'text-fg/25' : 'text-fg/55'}`}>
-                        {(jobStatus?.step || 0) >= step ? desc : 'Waiting...'}
-                      </p>
-                    </div>
-                  </div>
-                ))}
-              </div>
+          {/* ── Live Autonomous Agent Pipeline Tracker (when job is running) ── */}
+          {jobId && !reportData && (
+            <section className="mb-8">
+              <AgentPipelineTracker
+                jobId={jobId}
+                onComplete={async () => {
+                  try {
+                    const res = await fetch(`${API_URL}/api/jobs/${jobId}/status`, { headers: apiHeaders() });
+                    const data = await res.json();
+                    if (data.report_id) {
+                      setReportId(data.report_id);
+                      await loadReport(data.report_id);
+                      setChatOpen(true);
+                    }
+                  } catch (e) {
+                    console.error("Failed to load completed report:", e);
+                  }
+                }}
+              />
             </section>
           )}
 

@@ -58,18 +58,31 @@ def normalize_dataframe_types(df: pd.DataFrame) -> pd.DataFrame:
 
         lower_col = col.lower()
         looks_like_identifier = any(token in lower_col for token in ["id", "code", "phone", "zip", "pin"])
-        numeric = coerce_numeric_series(df[col])
-        non_null_ratio = numeric.notna().mean()
-        unique_ratio = numeric.nunique(dropna=True) / max(len(numeric.dropna()), 1)
+        
+        # Pre-clean string representation: strip whitespace and common currencies/percentages
+        if df[col].dtype == object or str(df[col].dtype) in ['string', 'category']:
+            # Strip outer whitespace
+            str_series = df[col].astype(str).str.strip()
+            # If string contains currency or percentage formatting, coerce
+            numeric = coerce_numeric_series(df[col])
+            non_null_ratio = numeric.notna().mean()
+            unique_ratio = numeric.nunique(dropna=True) / max(len(numeric.dropna()), 1)
 
-        if non_null_ratio >= 0.65 and (unique_ratio < 0.98 or not looks_like_identifier):
-            df[col] = numeric
-            continue
+            if non_null_ratio >= 0.65 and (unique_ratio < 0.98 or not looks_like_identifier):
+                df[col] = numeric
+                continue
 
-        if any(token in lower_col for token in ["date", "time", "created", "updated"]):
-            parsed = pd.to_datetime(df[col], errors="coerce")
-            if parsed.notna().mean() >= 0.65:
-                df[col] = parsed
+            if any(token in lower_col for token in ["date", "time", "created", "updated"]):
+                parsed = pd.to_datetime(df[col], errors="coerce")
+                if parsed.notna().mean() >= 0.65:
+                    df[col] = parsed
+                    continue
+
+            # Standardize casing if inconsistent casing detected (e.g. 'EUROPE' vs 'Europe')
+            if str_series.str.lower().nunique() < str_series.nunique() and str_series.nunique() < 50:
+                df[col] = str_series.str.title()
+            else:
+                df[col] = str_series
 
     return df
 
@@ -191,12 +204,11 @@ def _compute_sparse_correlations(
     top_cols = variances.head(max_cols).index.tolist()
 
     corr = numeric[top_cols].corr()
-    # Mask weak correlations (keep |r| >= threshold but exclude self-correlations)
-    mask = corr.abs().where(corr.abs() >= threshold, other=np.nan)
-    np.fill_diagonal(mask.values, np.nan)  # exclude diagonal (self-correlation = 1)
-
-    # Drop all-NaN rows and columns
-    sparse = corr.where(mask.notna()).dropna(how="all", axis=0).dropna(how="all", axis=1)
+    corr_vals = corr.to_numpy(copy=True)
+    np.fill_diagonal(corr_vals, np.nan)
+    corr_no_diag = pd.DataFrame(corr_vals, index=corr.index, columns=corr.columns)
+    sparse = corr_no_diag.where(corr_no_diag.abs() >= threshold)
+    sparse = sparse.dropna(how="all", axis=0).dropna(how="all", axis=1)
     sparse = sparse.replace({np.nan: None, np.inf: None, -np.inf: None})
     return sparse.to_dict()
 
@@ -387,7 +399,12 @@ def _detect_domain(payload: dict) -> dict:
 # Legacy single-agent and multi-agent pipeline helper functions removed.
 
 
-def analyze_dataframe(df: pd.DataFrame, progress_callback: ProgressCallback | None = None, job_id: str | None = None) -> dict:
+def analyze_dataframe(
+    df: pd.DataFrame,
+    progress_callback: ProgressCallback | None = None,
+    job_id: str | None = None,
+    relational_manifest: dict | None = None
+) -> dict:
     """
     Main entry point. Orchestrates the full agentic pipeline with:
     - Smart sampling for large datasets (>10K rows)
@@ -475,6 +492,8 @@ def analyze_dataframe(df: pd.DataFrame, progress_callback: ProgressCallback | No
             max_regeneration_rounds=max_regeneration_rounds,
             job_id=job_id,
         )
+        if relational_manifest:
+            state.relational_manifest = relational_manifest
         
         # Copy current profile stage progress into the state
         state.stages_progress = stage_state.copy()
@@ -568,8 +587,9 @@ def analyze_dataframe(df: pd.DataFrame, progress_callback: ProgressCallback | No
             raise RuntimeError(f"AgentGraph pipeline failed: {err_msg}")
             
     except Exception as e:
-        logger.error(f"LLM analysis exception: {e}")
-        return {"error": str(e)}
+        err_msg = str(e) or f"{type(e).__name__}: Analysis request timed out or was interrupted."
+        logger.error(f"LLM analysis exception: {err_msg}")
+        return {"error": err_msg}
 
 def extract_statistics(df: pd.DataFrame, full_row_count: int | None = None, sampling_method: str = "full") -> dict:
     """
@@ -683,13 +703,17 @@ def extract_statistics(df: pd.DataFrame, full_row_count: int | None = None, samp
     stats["text_columns"] = text_cols
 
     # ── Potential Target Columns Heuristics ──────────────────────────────
-    potential_targets = []
+    explicit_targets = []
+    binary_targets = []
     for col in df.columns:
         col_lower = col.lower()
         is_binary = df[col].nunique() == 2
-        looks_like_target = any(t in col_lower for t in ["churn", "survived", "converted", "outcome", "label", "target", "y", "status", "class"])
-        if is_binary or (looks_like_target and df[col].nunique() <= 10):
-            potential_targets.append(col)
+        looks_like_target = any(t in col_lower for t in ["churn", "churned", "survived", "converted", "outcome", "label", "target", "default", "attrition", "status", "class"])
+        if looks_like_target and df[col].nunique() <= 10:
+            explicit_targets.append(col)
+        elif is_binary and not any(k in col_lower for k in ["gender", "device", "region", "country", "type", "variant", "group"]):
+            binary_targets.append(col)
+    potential_targets = explicit_targets + [b for b in binary_targets if b not in explicit_targets]
     stats["potential_targets"] = potential_targets
 
     # ── Time Features ────────────────────────────────────────────────────

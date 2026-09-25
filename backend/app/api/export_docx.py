@@ -231,6 +231,93 @@ def _render_dynamic_sections(doc, ai_report, stats, charts_list, c_accent_rgb):
 
     return True
 
+
+def _render_relational_schema_docx(doc, manifest: dict, c_accent_rgb):
+    """Renders multi-table schema lineage into the Word document."""
+    if not manifest:
+        return
+    tables = manifest.get("tables", [])
+    sql_query = manifest.get("sql_query", "")
+    row_count = manifest.get("row_count", 0)
+    if not tables and not sql_query:
+        return
+
+    _add_heading_styled(doc, "Multi-Source Relational Architecture & Lineage", 1)
+    p_sum = doc.add_paragraph()
+    p_sum.add_run(
+        f"Relational federation unified {len(tables)} table(s) into an analytical dataset of "
+        f"{row_count:,} records via autonomous key detection."
+    )
+
+    if tables:
+        t_rows = [["Entity / Table", "Record Count", "Candidate Keys"]]
+        for tbl in tables:
+            t_name = str(tbl.get("table_name", tbl.get("name", "Table")))
+            cnt = tbl.get("row_count", tbl.get("rows", "-"))
+            cnt_str = f"{cnt:,}" if isinstance(cnt, (int, float)) else str(cnt)
+            raw_keys = tbl.get("candidate_keys", tbl.get("keys", []))
+            t_keys = ", ".join(raw_keys) if raw_keys else "Inferred by Schema Linker"
+            t_rows.append([t_name, cnt_str, t_keys])
+
+        table = doc.add_table(rows=len(t_rows), cols=3)
+        for i, row in enumerate(table.rows):
+            for j, cell in enumerate(row.cells):
+                cell.text = t_rows[i][j]
+                _set_cell_margins(cell, top=80, bottom=80, left=80, right=80)
+        doc.add_paragraph()
+
+    if sql_query:
+        _add_heading_styled(doc, "Materialized Relational SQL Execution", 2, c_accent_rgb)
+        p_sql = doc.add_paragraph()
+        run_sql = p_sql.add_run(sql_query)
+        run_sql.font.name = "Consolas"
+        run_sql.font.size = Pt(8.5)
+        doc.add_paragraph()
+
+
+def _render_experimentation_docx(doc, exp_results: dict, c_accent_rgb):
+    """Renders A/B testing evaluation and rollout decision into the Word document."""
+    if not exp_results or not exp_results.get("is_experiment"):
+        return
+
+    _add_heading_styled(doc, "A/B Testing & Controlled Experimentation Analysis", 1)
+    decision = exp_results.get("rollout_decision", "INCONCLUSIVE")
+    rec = exp_results.get("recommendation", "")
+    target_metric = exp_results.get("primary_metric", "Target Metric")
+
+    p_dec = doc.add_paragraph()
+    r_dec = p_dec.add_run(f"ROLLOUT DECISION: {decision}\n")
+    r_dec.font.bold = True
+    r_dec.font.size = Pt(11)
+    p_dec.add_run(f"Hypothesis Evaluation: {rec}")
+
+    srm = exp_results.get("srm_check", {})
+    srm_passed = srm.get("passed", True)
+    srm_status = "PASSED (No Traffic Allocation Bias)" if srm_passed else "WARNING: SRM VIOLATION DETECTED"
+    p_srm = doc.add_paragraph(f"• Sample Ratio Mismatch (SRM) Integrity: {srm_status} (Chi-Square p={srm.get('p_value', 1.0):.4f})")
+    p_srm.paragraph_format.left_indent = Inches(0.25)
+
+    lift = exp_results.get("lift_analysis", {})
+    if lift:
+        c_mean = lift.get("control_mean", 0.0)
+        t_mean = lift.get("treatment_mean", 0.0)
+        rel_lift = lift.get("relative_lift_pct", 0.0)
+        p_val = lift.get("p_value", 1.0)
+        ci = lift.get("confidence_interval_95", [0.0, 0.0])
+        sig = "Yes (p < 0.05)" if lift.get("statistically_significant") else "No (p >= 0.05)"
+
+        t_rows = [
+            ["Metric", "Control Mean", "Variant Mean", "Lift %", "95% CI", "Stat. Sig."],
+            [target_metric, f"{c_mean:.4f}", f"{t_mean:.4f}", f"{rel_lift:+.2f}%", f"[{ci[0]:.4f}, {ci[1]:.4f}]", sig]
+        ]
+        table = doc.add_table(rows=2, cols=6)
+        for i, row in enumerate(table.rows):
+            for j, cell in enumerate(row.cells):
+                cell.text = t_rows[i][j]
+                _set_cell_margins(cell, top=80, bottom=80, left=80, right=80)
+        doc.add_paragraph()
+
+
 def generate_docx_response(report_id: str, report_data: dict) -> StreamingResponse:
     ai_report   = report_data.get("report", {})
     stats       = report_data.get("stats", {})
@@ -452,6 +539,11 @@ def generate_docx_response(report_id: str, report_data: dict) -> StreamingRespon
         doc.add_paragraph(exec_sum)
         doc.add_paragraph()
 
+    # ── Multi-Source Relational Architecture & Lineage ─────────────────────────
+    relational_manifest = ai_report.get("relational_manifest", {}) or report_data.get("relational_manifest", {})
+    if relational_manifest:
+        _render_relational_schema_docx(doc, relational_manifest, c_accent_rgb)
+
     # ── Build charts for the document ───────────────────────────────────────────
     charts = build_charts(report_data)
 
@@ -503,6 +595,11 @@ def generate_docx_response(report_id: str, report_data: dict) -> StreamingRespon
                 p_lim = doc.add_paragraph(f"• {lim}")
                 p_lim.paragraph_format.left_indent = Inches(0.25)
             doc.add_paragraph()
+
+        # A/B Testing & Controlled Experimentation
+        experiment_results = ai_report.get("experiment_results", {}) or report_data.get("experiment_results", {})
+        if experiment_results:
+            _render_experimentation_docx(doc, experiment_results, c_accent_rgb)
             
     else:
         # ── LEGACY FALLBACK: Use the old fixed-section rendering ────────────────

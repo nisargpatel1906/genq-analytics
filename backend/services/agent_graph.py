@@ -15,6 +15,7 @@ import scipy.stats as stats
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
+import seaborn as sns
 from typing import Callable, Dict, Any, List, Optional, TypedDict
 
 from langgraph.graph import StateGraph, END
@@ -36,6 +37,10 @@ from services.agent_prompts import (
     FORECASTER_PROMPT,
     ANOMALY_DETECTOR_PROMPT,
     STRATEGIC_ADVISOR_PROMPT,
+    DATA_CLEANER_PROMPT,
+    HYPOTHESIS_PLANNER_PROMPT,
+    ML_MODELER_PROMPT,
+    EXPERIMENTATION_PROMPT,
 )
 
 logger = logging.getLogger("genq_api.agent_graph")
@@ -101,6 +106,12 @@ class AnalysisGraphState(TypedDict, total=False):
     strategic_results: Dict[str, Any]
     time_column_detected: Optional[str]
     target_columns_detected: List[str]
+    # Data Quality Engineering, Dynamic Hypotheses & ML
+    cleaning_manifest: Dict[str, Any]
+    investigation_plan: Dict[str, Any]
+    ml_results: Dict[str, Any]
+    experiment_results: Dict[str, Any]
+    relational_manifest: Dict[str, Any]
 
     # Status flags
     cancelled: bool
@@ -173,6 +184,11 @@ class AnalysisState:
         self.strategic_results: Dict[str, Any] = {}
         self.time_column_detected: Optional[str] = None
         self.target_columns_detected: List[str] = []
+        self.cleaning_manifest: Dict[str, Any] = {}
+        self.investigation_plan: Dict[str, Any] = {}
+        self.ml_results: Dict[str, Any] = {}
+        self.experiment_results: Dict[str, Any] = {}
+        self.relational_manifest: Dict[str, Any] = {}
 
 
 def extract_code_block(text: str) -> str:
@@ -291,10 +307,14 @@ def publish_stage_progress(
     """Updates progress dictionary and invokes the user progress_callback."""
     stage_names = {
         "profile": "Data Profiler",
+        "data_cleaner": "Data Quality & Cleaning Agent",
+        "hypothesis_planner": "Research Planning Agent",
         "sampling": "Smart Sampler",
         "data_scientist": "Data Scientist Agent",
         "reflector": "Reflector Agent",
+        "viz_preprocessor": "Visualization Preprocessor",
         "viz_coder": "Visualization Agent",
+        "viz_repair": "Visualization Self-Repair",
         "report_writer": "Report Writer",
         "narrative_stitcher": "Narrative Stitcher",
         "auditor": "Quality Auditor",
@@ -302,6 +322,8 @@ def publish_stage_progress(
         "causal_analyst": "Causal Inference Agent",
         "forecaster": "Forecasting Agent",
         "anomaly_detector": "Anomaly Detection Agent",
+        "experimentation": "A/B Experimentation Agent",
+        "ml_modeler": "Machine Learning Agent",
         "strategic_advisor": "Strategic Insights Agent",
     }
 
@@ -341,6 +363,249 @@ def publish_stage_progress(
 # ─────────────────────────────────────────────────────────────────────────────
 # LangGraph Node Implementations
 # ─────────────────────────────────────────────────────────────────────────────
+
+def data_cleaner_node(state: AnalysisGraphState) -> dict:
+    """Data Cleaner Agent: Autonomously audits, cleans, and standardizes data."""
+    if check_cancelled(state):
+        raise JobCancelledException("Job cancelled by user.")
+
+    publish_stage_progress(
+        state,
+        "data_cleaner",
+        "running",
+        "Data Cleaner Agent: Auditing data quality, standardizing casing, and handling dirty values..."
+    )
+
+    df = state["df"].copy()
+    initial_rows = len(df)
+    schema = state.get("schema", {})
+    domain_brief = state.get("domain_brief", {})
+    currency_context = state.get("currency_context") or detect_currency_and_units(df, schema, state.get("sample_rows", []))
+    stats_dict = state.get("stats", {})
+    missing_values = stats_dict.get("missing_values", {})
+    notable_issues = stats_dict.get("data_quality", {}).get("notable_issues", [])
+    duplicates_count = int(df.duplicated().sum())
+
+    # Build prompt
+    prompt = DATA_CLEANER_PROMPT.format(
+        domain=domain_brief.get("domain", "Unknown"),
+        currency_context=currency_context,
+        schema=json.dumps(schema, default=str),
+        sample_rows=json.dumps(state.get("sample_rows", [])[:5], default=str),
+        missing_values=json.dumps(missing_values, default=str),
+        duplicate_rows=duplicates_count,
+        data_quality_issues=json.dumps(notable_issues, default=str),
+    )
+
+    messages = [
+        {"role": "system", "content": "You are an expert Data Quality Engineer. Generate a Python script to clean and standardize the DataFrame."},
+        {"role": "user", "content": prompt}
+    ]
+
+    cleaned_df = df.copy()
+    cleaning_manifest = {
+        "rows_before": initial_rows,
+        "rows_after": initial_rows,
+        "duplicates_removed": 0,
+        "actions": [],
+        "cleaned_columns": []
+    }
+
+    try:
+        response = chat_completion(messages, task="analysis", timeout=int(os.environ.get("LLM_TIMEOUT", "300")))
+        code = extract_code_block(response)
+        if code and ("pickle" in code or "manifest" in code or "clean" in code or "df" in code):
+            exec_res = execute_analysis_code(code, df, timeout_seconds=int(os.environ.get("CODE_EXEC_TIMEOUT", "120")))
+            if exec_res.success:
+                for out in exec_res.agent_outputs:
+                    fname = out.get("filename", "")
+                    if fname == "manifest.json" and isinstance(out.get("data"), dict):
+                        cleaning_manifest = out["data"]
+                    elif fname.endswith(".pkl") and "clean" in fname:
+                        import pickle
+                        try:
+                            c_df = pickle.loads(out["data"])
+                            if isinstance(c_df, pd.DataFrame) and len(c_df) > 0:
+                                cleaned_df = c_df.copy()
+                        except Exception:
+                            pass
+    except Exception as e:
+        logger.warning(f"Data Cleaner LLM code execution failed: {e}")
+
+    # Defensive standardization & deterministic enhancement
+    if cleaned_df.duplicated().sum() > 0:
+        dups_before = len(cleaned_df)
+        cleaned_df = cleaned_df.drop_duplicates().copy()
+        dups_removed = dups_before - len(cleaned_df)
+        if dups_removed > 0:
+            cleaning_manifest["duplicates_removed"] = cleaning_manifest.get("duplicates_removed", 0) + dups_removed
+            cleaning_manifest.setdefault("actions", []).append({
+                "column": "all",
+                "operation": "deduplication",
+                "reason": f"Removed {dups_removed} duplicate row(s)",
+                "rows_affected": dups_removed
+            })
+
+    for col in cleaned_df.select_dtypes(include=['object', 'string']).columns:
+        str_s = cleaned_df[col].astype(str).str.strip()
+        if str_s.nunique() < 50 and str_s.str.lower().nunique() < str_s.nunique():
+            cleaned_df[col] = str_s.str.title()
+            cleaning_manifest.setdefault("actions", []).append({
+                "column": col,
+                "operation": "casing_normalization",
+                "reason": "Standardized inconsistent casing to Title Case across categories",
+                "rows_affected": len(cleaned_df)
+            })
+            if col not in cleaning_manifest.setdefault("cleaned_columns", []):
+                cleaning_manifest["cleaned_columns"].append(col)
+
+    for col in cleaned_df.select_dtypes(include=[np.number]).columns:
+        null_count = int(cleaned_df[col].isnull().sum())
+        if 0 < null_count < len(cleaned_df) * 0.3:
+            median_val = cleaned_df[col].median()
+            cleaned_df[col] = cleaned_df[col].fillna(median_val)
+            cleaning_manifest.setdefault("actions", []).append({
+                "column": col,
+                "operation": "median_imputation",
+                "reason": f"Imputed {null_count} missing values with column median ({median_val})",
+                "rows_affected": null_count
+            })
+            if col not in cleaning_manifest.setdefault("cleaned_columns", []):
+                cleaning_manifest["cleaned_columns"].append(col)
+
+    cleaning_manifest["rows_before"] = initial_rows
+    cleaning_manifest["rows_after"] = len(cleaned_df)
+    cleaning_manifest["summary"] = (
+        f"Data quality standardization completed. {len(cleaning_manifest.get('actions', []))} cleaning action(s) applied. "
+        f"{cleaning_manifest.get('duplicates_removed', 0)} duplicates removed, {len(cleaning_manifest.get('cleaned_columns', []))} column(s) standardized."
+    )
+
+    updated_schema = {col: str(dtype) for col, dtype in cleaned_df.dtypes.items()}
+    updated_sample = cleaned_df.head(12).replace({np.nan: None, np.inf: None, -np.inf: None}).to_dict("records")
+
+    publish_stage_progress(
+        state,
+        "data_cleaner",
+        "completed",
+        cleaning_manifest["summary"]
+    )
+
+    return {
+        "df": cleaned_df,
+        "schema": updated_schema,
+        "sample_rows": updated_sample,
+        "cleaning_manifest": cleaning_manifest
+    }
+
+
+def hypothesis_planner_node(state: AnalysisGraphState) -> dict:
+    """Research Planning Agent: Formulates dynamic, domain-tailored business hypotheses."""
+    if check_cancelled(state):
+        raise JobCancelledException("Job cancelled by user.")
+
+    publish_stage_progress(
+        state,
+        "hypothesis_planner",
+        "running",
+        "Research Planning Agent: Synthesizing domain context and formulating testable hypotheses..."
+    )
+
+    df = state["df"]
+    schema = state.get("schema", {})
+    domain_brief = state.get("domain_brief", {})
+    stats_dict = state.get("stats", {})
+    numeric_summary = stats_dict.get("numeric_summary", {})
+    potential_targets = stats_dict.get("potential_targets", [])
+    time_features = stats_dict.get("time_features", {})
+
+    prompt = HYPOTHESIS_PLANNER_PROMPT.format(
+        domain=domain_brief.get("domain", "Unknown"),
+        purpose=domain_brief.get("datasetPurpose", "Analyze data relationships"),
+        dataset_type=domain_brief.get("datasetType", "cross-sectional"),
+        important_columns=json.dumps(domain_brief.get("importantColumns", [])),
+        potential_targets=json.dumps(potential_targets),
+        time_features=json.dumps(time_features),
+        schema=json.dumps(schema, default=str),
+        numeric_summary=json.dumps(numeric_summary, default=str)[:3000],
+    )
+
+    messages = [
+        {"role": "system", "content": "You are the Lead Quantitative Research Director. Formulate dynamic hypotheses for this dataset. Output JSON only."},
+        {"role": "user", "content": prompt}
+    ]
+
+    plan = {}
+    try:
+        response = chat_completion(messages, task="analysis", json_mode=True, timeout=int(os.environ.get("LLM_TIMEOUT", "300")))
+        parsed = parse_json_safely(response)
+        if "error" not in parsed and ("hypotheses" in parsed or "business_objective" in parsed):
+            plan = parsed
+    except Exception as e:
+        logger.warning(f"Hypothesis planner LLM error: {e}")
+
+    # Fallback plan if LLM failed or mocked
+    if not plan or "hypotheses" not in plan or not plan["hypotheses"]:
+        cols = list(df.columns)
+        num_cols = list(df.select_dtypes(include=[np.number]).columns)
+        cat_cols = list(df.select_dtypes(include=['object', 'category']).columns)
+        hypotheses = []
+
+        if potential_targets and num_cols:
+            tgt = potential_targets[0]
+            pred = [c for c in num_cols if c != tgt][0] if len(num_cols) > 1 else num_cols[0]
+            hypotheses.append({
+                "id": "H1",
+                "statement": f"Target variable '{tgt}' is significantly driven by variations in '{pred}'.",
+                "target_variables": [tgt, pred],
+                "suggested_tests": ["correlation", "regression", "group_analysis"],
+                "business_impact": f"Identifies primary operational lever influencing {tgt}."
+            })
+        elif len(num_cols) >= 2:
+            hypotheses.append({
+                "id": "H1",
+                "statement": f"Strong linear or monotonic dependency exists between '{num_cols[0]}' and '{num_cols[1]}'.",
+                "target_variables": [num_cols[0], num_cols[1]],
+                "suggested_tests": ["correlation", "regression"],
+                "business_impact": "Discovers core structural interaction in the numeric data."
+            })
+
+        if cat_cols and num_cols:
+            c_col = cat_cols[0]
+            n_col = num_cols[0]
+            hypotheses.append({
+                "id": "H2",
+                "statement": f"Distribution of '{n_col}' diverges significantly across categories of '{c_col}'.",
+                "target_variables": [c_col, n_col],
+                "suggested_tests": ["group_analysis", "anova", "t_test"],
+                "business_impact": f"Reveals segment-level divergence for strategic targeting."
+            })
+
+        if len(num_cols) > 2:
+            n3 = num_cols[2] if len(num_cols) > 2 else num_cols[-1]
+            hypotheses.append({
+                "id": "H3",
+                "statement": f"Outlier anomalies in '{n3}' represent high-risk or high-value tail segments.",
+                "target_variables": [n3],
+                "suggested_tests": ["outlier_detection", "inspect_column"],
+                "business_impact": "Mitigates operational tail-risk."
+            })
+
+        plan = {
+            "business_objective": f"Empirically determine core performance drivers and segment variance in {domain_brief.get('domain', 'dataset')}.",
+            "hypotheses": hypotheses,
+            "investigation_priorities": [h["statement"] for h in hypotheses],
+            "potential_confounders": [cat_cols[1]] if len(cat_cols) > 1 else []
+        }
+
+    publish_stage_progress(
+        state,
+        "hypothesis_planner",
+        "completed",
+        f"Hypothesis plan active: {len(plan.get('hypotheses', []))} hypotheses formulated."
+    )
+
+    return {"investigation_plan": plan}
+
 
 def data_scientist_node(state: AnalysisGraphState) -> dict:
     """Data Scientist Agent Node: Executes exploratory data analysis and tool-calling cycle."""
@@ -386,6 +651,7 @@ def data_scientist_node(state: AnalysisGraphState) -> dict:
         grouped_summary=json.dumps(stats_dict.get("grouped_summary", {}), default=str),
         feedback=feedback,
         currency_context=currency_context,
+        investigation_plan="\n".join([f"- [{h.get('id','H')}]: {h.get('statement','')} (Variables: {', '.join(h.get('target_variables',[]))})" for h in state.get("investigation_plan", {}).get("hypotheses", [])]) or "Conduct rigorous exploratory data analysis across key distributions and correlations.",
     )
 
     conversation_history = list(state.get("conversation_history", []))
@@ -904,8 +1170,8 @@ def reflector_node(state: AnalysisGraphState) -> dict:
         publish_stage_progress(
             state,
             "reflector",
-            "running",
-            f"Reflection: Loop requested. Feedback: {feedback[:80]}...",
+            "completed",
+            f"Reflection: Loop requested (Round {ref_iter + 1}/{max_ref}). Feedback: {feedback[:80]}...",
             ref_iter
         )
         return {
@@ -954,7 +1220,7 @@ def viz_preprocessor_node(state: AnalysisGraphState) -> dict:
 
     publish_stage_progress(
         state,
-        "viz_coder",
+        "viz_preprocessor",
         "running",
         "Pre-processing analysis results into chart-ready data specifications...",
         state.get("regeneration_round", 0)
@@ -984,6 +1250,15 @@ def viz_preprocessor_node(state: AnalysisGraphState) -> dict:
                 break
         except Exception as e:
             logger.warning(f"Visualization Preprocessor attempt {attempt + 1} failed: {e}")
+
+    num_specs = len(res_json.get("visualizations", [])) if isinstance(res_json, dict) else 0
+    publish_stage_progress(
+        state,
+        "viz_preprocessor",
+        "completed",
+        f"Formulated {num_specs} visualization specification(s) for sandbox rendering.",
+        state.get("regeneration_round", 0)
+    )
 
     return {"visualization_data": res_json}
 
@@ -1335,63 +1610,6 @@ def route_viz_repair(state: AnalysisGraphState) -> str:
         )
     return "report_writer"
 
-
-def report_writer_node(state: AnalysisGraphState) -> dict:
-    """Report Writer Node: Structures findings, stats, and charts into the primary report JSON."""
-    if check_cancelled(state):
-        raise JobCancelledException("Job cancelled by user.")
-
-    publish_stage_progress(
-        state,
-        "report_writer",
-        "running",
-        "Structuring and writing report narrative, executive summary and recommendations...",
-        state.get("regeneration_round", 0)
-    )
-
-    charts_desc = [
-        {"title": c["title"], "filename": c["filename"], "interpretation": c["interpretation"]}
-        for c in state.get("chart_images", [])
-    ]
-    stats_dict = state.get("stats", {})
-    numeric_sum = json.dumps(stats_dict.get("numeric_summary", {}), default=str)
-    grouped_sum = json.dumps(stats_dict.get("grouped_summary", {}), default=str)
-    missing_vals = json.dumps(stats_dict.get("missing_values", {}), default=str)
-    stats_summary = f"Missing values: {missing_vals}\nNumeric Summary: {numeric_sum}\nGrouped Summary: {grouped_sum}"
-
-    currency_context = state.get("currency_context") or "No currency context detected."
-
-    # Senior tier context for richer report
-    _causal = state.get("causal_results", {})
-    _forecast = state.get("forecast_results", {})
-    _anomaly = state.get("anomaly_results", {})
-    _strategic = state.get("strategic_results", {})
-    senior_context = (
-        f"\n\n## Causal Analysis Summary\n{_causal.get('causal_summary', 'Not available.')}\n"
-        f"\n## Forecast\nTrend: {_forecast.get('trend_direction', 'N/A')} | "
-        f"Slope/period: {_forecast.get('trend_slope_per_period', 'N/A')} | "
-        f"Skipped: {_forecast.get('skipped', False)}\n"
-        f"\n## Anomaly Detection\nRate: {_anomaly.get('anomaly_rate_pct', 'N/A')}% | "
-        f"Segments detected: {len(_anomaly.get('segments', []))}\n"
-        f"\n## Strategic Headline\n{_strategic.get('executive_headline', 'Not available.')}\n"
-        f"Key complications: {json.dumps(_strategic.get('complication', []), default=str)[:800]}\n"
-    )
-
-    prompt = REPORT_WRITER_PROMPT.format(
-        domain_brief=json.dumps(state.get("domain_brief", {}), default=str),
-        schema=json.dumps(state.get("schema", {}), default=str),
-        sample_rows=json.dumps(state.get("sample_rows", []), default=str),
-        stats_summary=stats_summary + senior_context,
-        full_analysis=json.dumps(state.get("analysis_results", {}), default=str),
-        charts=json.dumps(charts_desc, default=str),
-        currency_context=currency_context,
-    )
-
-    messages = [
-        {"role": "system", "content": "You are a professional business writer. Generate JSON report conforming to the requested schema. Output JSON only."},
-        {"role": "user", "content": prompt}
-    ]
-
 def _normalize_report_dict(data: dict, state: AnalysisGraphState) -> dict:
     if not isinstance(data, dict):
         return {}
@@ -1498,13 +1716,21 @@ def report_writer_node(state: AnalysisGraphState) -> dict:
 
     currency_context = state.get("currency_context") or "No currency context detected."
 
-    # Senior tier context for richer report
+    # Senior tier & autonomous team context for richer report
+    _cleaning = state.get("cleaning_manifest", {})
+    _plan = state.get("investigation_plan", {})
+    _ml = state.get("ml_results", {})
     _causal = state.get("causal_results", {})
     _forecast = state.get("forecast_results", {})
     _anomaly = state.get("anomaly_results", {})
     _strategic = state.get("strategic_results", {})
     senior_context = (
-        f"\n\n## Causal Analysis Summary\n{_causal.get('causal_summary', 'Not available.')}\n"
+        f"\n\n## Data Quality Engineering & Cleaning Manifest\n{_cleaning.get('summary', 'Standardized.')}\n"
+        f"Actions taken: {json.dumps(_cleaning.get('actions', []), default=str)[:600]}\n"
+        f"\n## Dynamic Research Hypotheses & Findings\n{json.dumps(_plan.get('hypotheses', []), default=str)[:600]}\n"
+        f"\n## Machine Learning & Predictive Modeling\n{_ml.get('summary', 'Predictive modeling conducted.')}\n"
+        f"Top Drivers: {json.dumps(_ml.get('feature_importances', []), default=str)[:600]}\n"
+        f"\n## Causal Analysis Summary\n{_causal.get('causal_summary', 'Not available.')}\n"
         f"\n## Forecast\nTrend: {_forecast.get('trend_direction', 'N/A')} | "
         f"Slope/period: {_forecast.get('trend_slope_per_period', 'N/A')} | "
         f"Skipped: {_forecast.get('skipped', False)}\n"
@@ -1924,13 +2150,111 @@ def route_audit(state: AnalysisGraphState) -> str:
         return "report_writer"
 
 
+def _generate_deterministic_fallback_charts(df: pd.DataFrame, report: dict) -> list[dict]:
+    """Generates guaranteed publication-grade fallback charts when agent charts are empty."""
+    charts = []
+    if df is None or df.empty or len(df.columns) < 2:
+        return charts
+
+    import io
+    numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+    cat_cols = [c for c in df.columns if df[c].dtype == 'object' or str(df[c].dtype) in ['category', 'string']]
+
+    # 1. Correlation Heatmap
+    if len(numeric_cols) >= 2:
+        try:
+            top_nums = numeric_cols[:6]
+            corr = df[top_nums].corr()
+            fig, ax = plt.subplots(figsize=(7, 5), dpi=150)
+            sns.heatmap(corr, annot=True, fmt=".2f", cmap="Blues", cbar=True, ax=ax, linewidths=0.5)
+            ax.set_title("Numeric Feature Correlation Matrix", fontsize=11, fontweight="bold", pad=10)
+            plt.tight_layout()
+            buf = io.BytesIO()
+            plt.savefig(buf, format="png")
+            plt.close(fig)
+            buf.seek(0)
+            charts.append({
+                "filename": "correlation_heatmap_fallback.png",
+                "title": "Correlation Analysis Across Key Features",
+                "interpretation": "Correlation structure and linear dependencies observed among primary numerical variables.",
+                "insight_text": "Strongest statistical relationships highlighted in correlation matrix.",
+                "finding_title": "Feature Correlation Structure",
+                "data": buf.read()
+            })
+        except Exception as e:
+            logger.warning(f"Fallback correlation heatmap failed: {e}")
+
+    # 2. Categorical / Target Grouped Bar Chart
+    if cat_cols and numeric_cols:
+        try:
+            c_col = [c for c in cat_cols if 1 < df[c].nunique() <= 10]
+            cat = c_col[0] if c_col else cat_cols[0]
+            num = numeric_cols[0]
+            grouped = df.groupby(cat)[num].mean().reset_index().sort_values(by=num, ascending=False).head(8)
+            fig, ax = plt.subplots(figsize=(7, 4.5), dpi=150)
+            sns.barplot(data=grouped, x=cat, y=num, hue=cat, palette="Blues_r", legend=False, ax=ax)
+            ax.spines["top"].set_visible(False)
+            ax.spines["right"].set_visible(False)
+            ax.set_title(f"Average {num} by {cat}", fontsize=11, fontweight="bold", pad=10)
+            plt.xticks(rotation=25, ha="right")
+            plt.tight_layout()
+            buf = io.BytesIO()
+            plt.savefig(buf, format="png")
+            plt.close(fig)
+            buf.seek(0)
+            charts.append({
+                "filename": f"bar_{cat}_{num}_fallback.png",
+                "title": f"Segment Breakdown: {num} by {cat}",
+                "interpretation": f"Comparative performance and mean variance of {num} segmented by {cat}.",
+                "insight_text": f"Divergence observed across categories of {cat}.",
+                "finding_title": f"Segment Analysis: {cat}",
+                "data": buf.read()
+            })
+        except Exception as e:
+            logger.warning(f"Fallback bar chart failed: {e}")
+
+    # 3. Numeric Distribution Box Plot
+    if numeric_cols:
+        try:
+            num = numeric_cols[0]
+            fig, ax = plt.subplots(figsize=(7, 3.5), dpi=150)
+            sns.boxplot(x=df[num].dropna(), color="#93C5FD", ax=ax)
+            ax.spines["top"].set_visible(False)
+            ax.spines["right"].set_visible(False)
+            ax.set_title(f"Distribution & Outlier Range: {num}", fontsize=11, fontweight="bold", pad=10)
+            plt.tight_layout()
+            buf = io.BytesIO()
+            plt.savefig(buf, format="png")
+            plt.close(fig)
+            buf.seek(0)
+            charts.append({
+                "filename": f"box_{num}_fallback.png",
+                "title": f"Distribution Profile of {num}",
+                "interpretation": f"Quartile ranges, median, and outlier dispersion for {num}.",
+                "insight_text": f"Spread and skewness across the distribution of {num}.",
+                "finding_title": f"Distribution Analysis: {num}",
+                "data": buf.read()
+            })
+        except Exception as e:
+            logger.warning(f"Fallback box plot failed: {e}")
+
+    return charts
+
+
 def finalize_node(state: AnalysisGraphState) -> dict:
     """Finalize Node: Packages visual plans, code transparency, and metadata into the final report."""
     if check_cancelled(state):
         raise JobCancelledException("Job cancelled by user.")
 
     report = dict(state.get("report", {}))
-    chart_images = state.get("chart_images", [])
+    chart_images = list(state.get("chart_images", []))
+
+    # Fallback visualization guarantee: never output a report with 0 charts
+    if not chart_images:
+        df = state.get("df")
+        fallback_charts = _generate_deterministic_fallback_charts(df, report)
+        if fallback_charts:
+            chart_images = fallback_charts
 
     if not report.get("id"):
         report["id"] = state.get("job_id") or f"rep_{uuid.uuid4().hex[:8]}"
@@ -1971,11 +2295,17 @@ def finalize_node(state: AnalysisGraphState) -> dict:
     report["agent_files_created"] = state.get("agent_files", [])
     report["investigation_log"] = state.get("investigation_log", [])
 
-    # ── Senior Analyst Tier results embedded in report ──────────────────────
+    # ── Full Analytics Team Artifacts embedded in report ───────────────────
+    report["data_cleaning_manifest"] = state.get("cleaning_manifest", {})
+    report["investigation_plan"] = state.get("investigation_plan", {})
+    report["ml_predictive_modeling"] = state.get("ml_results", {})
     report["causal_analysis"] = state.get("causal_results", {})
     report["forecast"] = state.get("forecast_results", {})
     report["anomaly_detection"] = state.get("anomaly_results", {})
     report["strategic_brief"] = state.get("strategic_results", {})
+    report["experiment_results"] = state.get("experiment_results", {})
+    report["relational_manifest"] = state.get("relational_manifest", {})
+
     # Expose executive headline at top level for easy access in PDF/UI
     strategic = state.get("strategic_results", {})
     if strategic.get("executive_headline") and not report.get("executive_headline"):
@@ -1984,7 +2314,15 @@ def finalize_node(state: AnalysisGraphState) -> dict:
         report["strategic_recommendations"] = strategic["recommendations"]
     # ────────────────────────────────────────────────────────────────────────
 
-    return {"final_report": report, "report": report}
+    publish_stage_progress(
+        state,
+        "finalize",
+        "completed",
+        "Finalized report packages, visual figures, and quality audit verification.",
+        state.get("regeneration_round", 0)
+    )
+
+    return {"final_report": report, "report": report, "chart_images": chart_images}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2284,7 +2622,385 @@ def anomaly_detector_node(state: AnalysisGraphState) -> dict:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Senior Analyst Tier — Node 4: Strategic Advisor
+# Senior Analyst Tier — Node 3b: A/B Experimentation Agent
+# ─────────────────────────────────────────────────────────────────────────────
+
+def experimentation_node(state: AnalysisGraphState) -> dict:
+    """A/B Experimentation Agent: Detects variant/treatment arms, validates Sample Ratio Mismatch (SRM),
+    computes lift confidence intervals, statistical power, and determines rollout recommendations."""
+    if check_cancelled(state):
+        raise JobCancelledException("Job cancelled by user.")
+
+    df = state.get("df_cleaned") if state.get("df_cleaned") is not None else state.get("df")
+    if df is None or df.empty:
+        return {"experiment_results": {"is_experiment": False}}
+
+    stats_dict = state.get("stats", {})
+    potential_targets = stats_dict.get("potential_targets", [])
+
+    variant_col = None
+    for col in df.columns:
+        c_low = col.lower()
+        if any(k in c_low for k in ["variant", "test_group", "treatment", "experiment_group", "arm", "is_control", "ab_test"]):
+            if 2 <= df[col].nunique(dropna=True) <= 5:
+                variant_col = col
+                break
+
+    if not variant_col:
+        for col in df.select_dtypes(include=["object", "category", "int", "bool"]).columns:
+            if df[col].nunique(dropna=True) == 2 and col not in potential_targets:
+                vals = [str(v).lower() for v in df[col].unique()]
+                if any(v in ["control", "treatment", "a", "b", "test", "variant_a", "variant_b"] for v in vals):
+                    variant_col = col
+                    break
+
+    if not variant_col:
+        return {"experiment_results": {"is_experiment": False, "summary": "No active A/B testing variant column detected."}}
+
+    publish_stage_progress(
+        state,
+        "experimentation",
+        "running",
+        f"A/B Experimentation Agent: Auditing experiment variants on '{variant_col}' and checking SRM..."
+    )
+
+    # Filter out obvious ID / key / index / code columns from being chosen as primary metric
+    candidate_metrics = [
+        c for c in df.select_dtypes(include=[np.number]).columns
+        if c != variant_col and not any(k == c.lower() or f"_{k}" in c.lower() or f"{k}_" in c.lower() for k in ["id", "key", "code", "index", "uuid"])
+    ]
+    if not candidate_metrics:
+        candidate_metrics = [c for c in df.select_dtypes(include=[np.number]).columns if c != variant_col]
+
+    # Prioritize business outcome metrics (rate, conversion, score, revenue, amount, sales, churn)
+    metric_priority = sorted(
+        candidate_metrics,
+        key=lambda col: any(k in col.lower() for k in ["rate", "conversion", "score", "revenue", "amount", "lift", "churn", "retention", "click", "spend", "sales", "val"]),
+        reverse=True
+    )
+
+    if potential_targets and potential_targets[0] in candidate_metrics:
+        primary_metric = potential_targets[0]
+    else:
+        primary_metric = metric_priority[0] if metric_priority else None
+
+    groups = df[variant_col].dropna().unique()
+    group_counts = df[variant_col].value_counts().to_dict()
+
+    experiment_results = {}
+    exp_charts = []
+
+    # SRM check using Chi-square goodness-of-fit
+    observed_counts = list(group_counts.values())
+    expected_counts = [len(df[variant_col].dropna()) / len(observed_counts)] * len(observed_counts)
+    chi2_stat, srm_p_value = stats.chisquare(f_obs=observed_counts, f_exp=expected_counts)
+    srm_violation = bool(srm_p_value < 0.01)
+
+    if len(groups) >= 2 and primary_metric:
+        control_label = [g for g in groups if "control" in str(g).lower() or str(g) in ["0", "A", "a"]]
+        control_val = control_label[0] if control_label else groups[0]
+        treatment_val = [g for g in groups if g != control_val][0]
+
+        c_series = df[df[variant_col] == control_val][primary_metric].dropna()
+        t_series = df[df[variant_col] == treatment_val][primary_metric].dropna()
+
+        if len(c_series) >= 5 and len(t_series) >= 5:
+            c_mean = float(c_series.mean())
+            t_mean = float(t_series.mean())
+            abs_lift = float(t_mean - c_mean)
+            rel_lift_pct = float((abs_lift / (abs(c_mean) + 1e-6)) * 100.0)
+
+            t_stat, p_val = stats.ttest_ind(t_series, c_series, equal_var=False)
+            se_diff = np.sqrt((c_series.var() / len(c_series)) + (t_series.var() / len(t_series)))
+            ci_lower = abs_lift - 1.96 * se_diff
+            ci_upper = abs_lift + 1.96 * se_diff
+
+            if srm_violation:
+                decision = "DO NOT SHIP (SRM Violation / Allocation Failure)"
+                decision_rationale = f"Sample Ratio Mismatch detected (p={srm_p_value:.4f} < 0.01). The variant allocation is compromised. Results invalid."
+            elif p_val < 0.05 and abs_lift > 0:
+                decision = "SHIP (Statistically Significant Lift)"
+                decision_rationale = f"Treatment '{treatment_val}' achieved statistically significant lift of +{rel_lift_pct:.2f}% on '{primary_metric}' (p={p_val:.4f})."
+            elif p_val < 0.05 and abs_lift < 0:
+                decision = "DO NOT SHIP (Statistically Significant Degradation)"
+                decision_rationale = f"Treatment '{treatment_val}' caused significant decline of {rel_lift_pct:.2f}% on '{primary_metric}' (p={p_val:.4f}). Rollout is harmful."
+            else:
+                decision = "ITERATE (Inconclusive / Underpowered)"
+                decision_rationale = f"Observed lift ({rel_lift_pct:+.2f}%) did not reach statistical significance (p={p_val:.4f} >= 0.05). Extend sample collection."
+
+            experiment_results = {
+                "is_experiment": True,
+                "variant_column": variant_col,
+                "control_variant": str(control_val),
+                "treatment_variant": str(treatment_val),
+                "primary_metric": primary_metric,
+                "srm_check": {
+                    "passed": not srm_violation,
+                    "p_value": round(float(srm_p_value), 4),
+                    "allocation": {str(k): int(v) for k, v in group_counts.items()}
+                },
+                "lift_analysis": {
+                    "control_mean": round(c_mean, 4),
+                    "treatment_mean": round(t_mean, 4),
+                    "absolute_lift": round(abs_lift, 4),
+                    "relative_lift_pct": round(rel_lift_pct, 2),
+                    "p_value": round(float(p_val), 4),
+                    "statistically_significant": bool(p_val < 0.05),
+                    "confidence_interval_95": [round(float(ci_lower), 4), round(float(ci_upper), 4)]
+                },
+                "rollout_decision": decision,
+                "recommendation": decision_rationale,
+                "summary": f"A/B experiment evaluated on '{primary_metric}'. Decision: {decision}. Relative lift: {rel_lift_pct:+.1f}% (p={p_val:.3f})."
+            }
+
+            try:
+                import io
+                fig, ax = plt.subplots(figsize=(7, 4.5), dpi=150)
+                cats = [f"Control ({control_val})", f"Treatment ({treatment_val})"]
+                vals = [c_mean, t_mean]
+                errs = [1.96 * (c_series.std() / np.sqrt(len(c_series))), 1.96 * (t_series.std() / np.sqrt(len(t_series)))]
+                bar_colors = ["#94A3B8", "#10B981" if abs_lift > 0 and p_val < 0.05 else ("#EF4444" if abs_lift < 0 and p_val < 0.05 else "#3B82F6")]
+                ax.bar(cats, vals, yerr=errs, capsize=6, color=bar_colors, width=0.45)
+                ax.spines["top"].set_visible(False)
+                ax.spines["right"].set_visible(False)
+                ax.set_title(f"A/B Experiment Impact: {primary_metric}", fontsize=11, fontweight="bold", pad=12)
+                ax.set_ylabel(f"Average {primary_metric}")
+                plt.tight_layout()
+                buf = io.BytesIO()
+                plt.savefig(buf, format="png")
+                plt.close(fig)
+                buf.seek(0)
+
+                exp_charts.append({
+                    "filename": f"ab_test_lift_{primary_metric}.png",
+                    "title": f"A/B Test Lift: {primary_metric}",
+                    "interpretation": decision_rationale,
+                    "insight_text": f"Relative lift of {rel_lift_pct:+.1f}% with rollout recommendation: {decision}.",
+                    "finding_title": "A/B Testing & Experimentation",
+                    "data": buf.read()
+                })
+            except Exception as chart_err:
+                logger.warning(f"Error rendering A/B test chart: {chart_err}")
+
+    publish_stage_progress(
+        state,
+        "experimentation",
+        "completed",
+        experiment_results.get("summary", "A/B Experimentation evaluation completed.")
+    )
+
+    return {
+        "experiment_results": experiment_results,
+        "charts": list(state.get("charts", [])) + exp_charts,
+        "chart_images": list(state.get("chart_images", [])) + exp_charts,
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Senior Analyst Tier — Node 4: ML Modeler
+# ─────────────────────────────────────────────────────────────────────────────
+
+def ml_modeler_node(state: AnalysisGraphState) -> dict:
+    """Machine Learning Agent: Trains predictive models, cross-validates, and ranks feature drivers."""
+    if check_cancelled(state):
+        raise JobCancelledException("Job cancelled by user.")
+
+    publish_stage_progress(
+        state,
+        "ml_modeler",
+        "running",
+        "Machine Learning Agent: Training predictive models and calculating feature importances..."
+    )
+
+    df = state["df"]
+    schema = state.get("schema", {})
+    currency_context = state.get("currency_context", "")
+    domain = state.get("domain_brief", {}).get("domain", "Unknown")
+    stats_dict = state.get("stats", {})
+    potential_targets = stats_dict.get("potential_targets", [])
+    col_profile = _build_col_profile(df)
+
+    # Detect primary target
+    primary_target = None
+    for c in df.columns:
+        c_low = c.lower()
+        if any(k in c_low for k in ["churn", "churned", "target", "label", "outcome", "converted", "attrition", "default"]):
+            primary_target = c
+            break
+
+    if not primary_target and potential_targets:
+        primary_target = potential_targets[0]
+
+    ml_charts = []
+    ml_results = {}
+
+    prompt = ML_MODELER_PROMPT.format(
+        domain=domain,
+        currency_context=currency_context,
+        target_columns=json.dumps([primary_target] if primary_target else []),
+        col_profile=json.dumps(col_profile, default=str),
+        analysis_results=json.dumps(state.get("analysis_results", {}), default=str)[:3000],
+    )
+
+    messages = [
+        {"role": "system", "content": "You are a Senior Machine Learning Engineer. Generate Python code to train, evaluate, and extract feature importances using scikit-learn."},
+        {"role": "user", "content": prompt}
+    ]
+
+    try:
+        response = chat_completion(messages, task="visual", timeout=int(os.environ.get("LLM_TIMEOUT", "300")))
+        code = extract_code_block(response)
+        if code and ("sklearn" in code or "RandomForest" in code or "LogisticRegression" in code or "ml_results" in code):
+            exec_res = execute_analysis_code(code, df, timeout_seconds=int(os.environ.get("CODE_EXEC_TIMEOUT", "120")))
+            if exec_res.success:
+                for out in exec_res.agent_outputs:
+                    fname = out.get("filename", "")
+                    if fname.endswith(".json") and "ml" in fname:
+                        ml_results = out.get("data", {})
+                    elif out.get("type") == "image" and isinstance(out.get("data"), (bytes, bytearray)):
+                        ml_charts.append({
+                            "filename": out["filename"],
+                            "title": out.get("finding_title") or "Feature Importance",
+                            "interpretation": out.get("interpretation", "Predictive feature drivers evaluated using machine learning."),
+                            "insight_text": out.get("insight_text", "Top predictive drivers of the target variable."),
+                            "finding_title": "Predictive Feature Importance",
+                            "data": out["data"]
+                        })
+    except Exception as e:
+        logger.warning(f"ML Modeler LLM execution encountered: {e}")
+
+    # Fallback robust deterministic ML execution using scikit-learn
+    if not ml_results:
+        from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
+        from sklearn.model_selection import train_test_split
+        from sklearn.preprocessing import LabelEncoder
+        from sklearn.metrics import accuracy_score, f1_score, r2_score, mean_squared_error
+
+        try:
+            data = df.copy()
+            drop_cols = [c for c in data.columns if any(k in c.lower() for k in ["id", "index", "date", "time", "timestamp"])]
+            if primary_target and primary_target in drop_cols:
+                drop_cols.remove(primary_target)
+
+            features = [c for c in data.columns if c not in drop_cols and c != primary_target]
+
+            if primary_target and primary_target in data.columns and len(features) >= 1:
+                y_raw = data[primary_target]
+                is_classification = y_raw.nunique() <= 10 or pd.api.types.is_object_dtype(y_raw) or str(y_raw.dtype) == 'category'
+
+                if is_classification:
+                    le = LabelEncoder()
+                    y = le.fit_transform(y_raw.astype(str))
+                else:
+                    y = pd.to_numeric(y_raw, errors="coerce").fillna(y_raw.median())
+
+                X = data[features].copy()
+                for c in X.columns:
+                    if pd.api.types.is_numeric_dtype(X[c]):
+                        X[c] = X[c].fillna(X[c].median())
+                    else:
+                        X[c] = LabelEncoder().fit_transform(X[c].astype(str))
+
+                if len(X) >= 10:
+                    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+                    if is_classification:
+                        model = RandomForestClassifier(n_estimators=50, max_depth=6, random_state=42)
+                        model.fit(X_train, y_train)
+                        preds = model.predict(X_test)
+                        acc = float(accuracy_score(y_test, preds))
+                        f1 = float(f1_score(y_test, preds, average="weighted", zero_division=0))
+                        importances = model.feature_importances_
+
+                        ml_results = {
+                            "task_type": "classification",
+                            "target_column": primary_target,
+                            "model_name": "RandomForestClassifier",
+                            "metrics": {
+                                "accuracy": round(acc, 4),
+                                "f1_score": round(f1, 4),
+                                "train_samples": len(X_train),
+                                "test_samples": len(X_test)
+                            },
+                            "feature_importances": [
+                                {"feature": f, "importance": round(float(imp), 4)}
+                                for f, imp in sorted(zip(features, importances), key=lambda x: x[1], reverse=True)[:10]
+                            ],
+                            "summary": f"Predictive classification model for '{primary_target}' achieved {acc*100:.1f}% accuracy and {f1:.3f} F1-score."
+                        }
+                    else:
+                        model = RandomForestRegressor(n_estimators=50, max_depth=6, random_state=42)
+                        model.fit(X_train, y_train)
+                        preds = model.predict(X_test)
+                        r2 = float(r2_score(y_test, preds))
+                        rmse = float(np.sqrt(mean_squared_error(y_test, preds)))
+                        importances = model.feature_importances_
+
+                        ml_results = {
+                            "task_type": "regression",
+                            "target_column": primary_target,
+                            "model_name": "RandomForestRegressor",
+                            "metrics": {
+                                "r2_score": round(r2, 4),
+                                "rmse": round(rmse, 4),
+                                "train_samples": len(X_train),
+                                "test_samples": len(X_test)
+                            },
+                            "feature_importances": [
+                                {"feature": f, "importance": round(float(imp), 4)}
+                                for f, imp in sorted(zip(features, importances), key=lambda x: x[1], reverse=True)[:10]
+                            ],
+                            "summary": f"Predictive regression model for '{primary_target}' achieved R² of {r2:.3f} and RMSE of {rmse:.2f}."
+                        }
+
+                    if not ml_charts and ml_results.get("feature_importances"):
+                        import io
+                        top_feats = ml_results["feature_importances"][:8][::-1]
+                        fig, ax = plt.subplots(figsize=(8, 4.5), dpi=150)
+                        feat_names = [item["feature"] for item in top_feats]
+                        feat_vals = [item["importance"] for item in top_feats]
+                        bars = ax.barh(feat_names, feat_vals, color="#3B82F6", edgecolor="none", height=0.6)
+                        ax.spines["top"].set_visible(False)
+                        ax.spines["right"].set_visible(False)
+                        ax.spines["left"].set_color("#CBD5E1")
+                        ax.spines["bottom"].set_color("#CBD5E1")
+                        ax.set_title(f"Predictive Driver Importance: {primary_target}", fontsize=12, fontweight="bold", pad=12)
+                        ax.set_xlabel("Relative Importance Score", fontsize=10)
+                        plt.tight_layout()
+                        buf = io.BytesIO()
+                        plt.savefig(buf, format="png")
+                        plt.close(fig)
+                        buf.seek(0)
+                        raw_bytes = buf.read()
+
+                        ml_charts.append({
+                            "filename": f"feature_importance_{primary_target}.png",
+                            "title": f"Top Drivers of {primary_target}",
+                            "interpretation": f"Relative importance of key drivers predicting {primary_target} using Random Forest modeling.",
+                            "insight_text": f"'{top_feats[-1]['feature']}' was identified as the #1 predictive driver.",
+                            "finding_title": "Predictive Feature Importance",
+                            "data": raw_bytes
+                        })
+        except Exception as e:
+            logger.warning(f"Deterministic ML execution fallback failed: {e}")
+            ml_results = {"task_type": "none", "summary": "ML modeling skipped due to insufficient feature variance."}
+
+    existing_charts = list(state.get("chart_images", []))
+    publish_stage_progress(
+        state,
+        "ml_modeler",
+        "completed",
+        ml_results.get("summary", "Machine learning modeling completed.")
+    )
+
+    return {
+        "ml_results": ml_results,
+        "chart_images": existing_charts + ml_charts
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Senior Analyst Tier — Node 5: Strategic Advisor
 # ─────────────────────────────────────────────────────────────────────────────
 
 def strategic_advisor_node(state: AnalysisGraphState) -> dict:
@@ -2343,6 +3059,8 @@ def build_analysis_graph() -> StateGraph:
     workflow = StateGraph(AnalysisGraphState)
 
     # Register Nodes
+    workflow.add_node("data_cleaner", data_cleaner_node)
+    workflow.add_node("hypothesis_planner", hypothesis_planner_node)
     workflow.add_node("data_scientist", data_scientist_node)
     workflow.add_node("reflector", reflector_node)
     workflow.add_node("viz_preprocessor", viz_preprocessor_node)
@@ -2352,6 +3070,8 @@ def build_analysis_graph() -> StateGraph:
     workflow.add_node("causal_analyst", causal_analyst_node)
     workflow.add_node("forecaster", forecaster_node)
     workflow.add_node("anomaly_detector", anomaly_detector_node)
+    workflow.add_node("experimentation", experimentation_node)
+    workflow.add_node("ml_modeler", ml_modeler_node)
     workflow.add_node("strategic_advisor", strategic_advisor_node)
     # Reporting Nodes
     workflow.add_node("report_writer", report_writer_node)
@@ -2360,7 +3080,9 @@ def build_analysis_graph() -> StateGraph:
     workflow.add_node("finalize", finalize_node)
 
     # Entry point
-    workflow.set_entry_point("data_scientist")
+    workflow.set_entry_point("data_cleaner")
+    workflow.add_edge("data_cleaner", "hypothesis_planner")
+    workflow.add_edge("hypothesis_planner", "data_scientist")
 
     # Sequence and Custom Loops
     workflow.add_edge("data_scientist", "reflector")
@@ -2399,10 +3121,12 @@ def build_analysis_graph() -> StateGraph:
         }
     )
 
-    # Senior Analyst Tier Pipeline (sequential)
+    # Senior Analyst Tier Pipeline (sequential with Experimentation and ML Modeler)
     workflow.add_edge("causal_analyst", "forecaster")
     workflow.add_edge("forecaster", "anomaly_detector")
-    workflow.add_edge("anomaly_detector", "strategic_advisor")
+    workflow.add_edge("anomaly_detector", "experimentation")
+    workflow.add_edge("experimentation", "ml_modeler")
+    workflow.add_edge("ml_modeler", "strategic_advisor")
     workflow.add_edge("strategic_advisor", "report_writer")
 
     workflow.add_edge("report_writer", "narrative_stitcher")
@@ -2501,6 +3225,10 @@ class AgentGraph:
                 "cancelled": False,
                 "error": None,
                 "final_report": {},
+                # Data Quality Engineering, Dynamic Hypotheses & ML
+                "cleaning_manifest": dict(getattr(self.state, "cleaning_manifest", {})),
+                "investigation_plan": dict(getattr(self.state, "investigation_plan", {})),
+                "ml_results": dict(getattr(self.state, "ml_results", {})),
                 # Senior Analyst Tier
                 "causal_results": dict(self.state.causal_results),
                 "forecast_results": dict(self.state.forecast_results),
@@ -2519,6 +3247,14 @@ class AgentGraph:
             final_state = self._compiled_graph.invoke(initial_state)
 
             # Sync updated attributes back to AnalysisState for caller compatibility
+            self.state.df = final_state.get("df", self.state.df)
+            self.state.schema = final_state.get("schema", self.state.schema)
+            self.state.sample_rows = final_state.get("sample_rows", self.state.sample_rows)
+            self.state.cleaning_manifest = final_state.get("cleaning_manifest", getattr(self.state, "cleaning_manifest", {}))
+            self.state.investigation_plan = final_state.get("investigation_plan", getattr(self.state, "investigation_plan", {}))
+            self.state.ml_results = final_state.get("ml_results", getattr(self.state, "ml_results", {}))
+            self.state.experiment_results = final_state.get("experiment_results", getattr(self.state, "experiment_results", {}))
+            self.state.relational_manifest = final_state.get("relational_manifest", getattr(self.state, "relational_manifest", {}))
             self.state.chart_images = final_state.get("chart_images", self.state.chart_images)
             self.state.report = final_state.get("report", self.state.report)
             self.state.audit = final_state.get("audit", self.state.audit)

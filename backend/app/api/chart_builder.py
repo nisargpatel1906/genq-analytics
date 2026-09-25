@@ -246,30 +246,38 @@ def build_charts(report_data: dict) -> list:
     Returns: [{title, buf, interpretation}, ...]
     """
     # Check if there are pre-generated chart images from the agentic code-gen pipeline
-    pregenerated_charts = report_data.get("report", {}).get("_meta", {}).get("chart_images", [])
+    pregenerated_charts = (
+        report_data.get("report", {}).get("_meta", {}).get("chart_images", [])
+        or report_data.get("chart_images", [])
+        or report_data.get("report", {}).get("chart_images", [])
+    )
+    charts = []
     if pregenerated_charts:
-        charts = []
         for ch in pregenerated_charts:
             try:
-                img_bytes = base64.b64decode(ch["image_b64"])
-                buf = io.BytesIO(img_bytes)
+                if "data" in ch and isinstance(ch["data"], (bytes, bytearray)):
+                    buf = io.BytesIO(ch["data"])
+                elif "image_b64" in ch:
+                    img_bytes = base64.b64decode(ch["image_b64"])
+                    buf = io.BytesIO(img_bytes)
+                else:
+                    continue
                 charts.append({
-                    "title": ch["title"],
+                    "title": ch.get("title") or ch.get("finding_title") or "Visualization",
                     "buf": buf,
-                    "interpretation": ch["interpretation"]
+                    "interpretation": ch.get("interpretation") or ch.get("insight_text", "")
                 })
             except Exception:
                 pass
-        if charts:
-            return charts
+        if len(charts) >= 3:
+            return charts[:5]
 
-    charts = []
     records   = report_data.get("data_sample", [])
     col_types = report_data.get("col_types", {})
     stats     = report_data.get("stats", {})
 
     if not records:
-        return []
+        return charts
 
     df = pd.DataFrame(records)
     num_cols, cat_cols, dt_cols, bin_cols = _infer_chart_columns(df, col_types)
@@ -281,12 +289,14 @@ def build_charts(report_data: dict) -> list:
     sns.set_style("whitegrid")
 
     visual_plan = report_data.get("report", {}).get("_visualPlan", {})
-    charts.extend(_build_planned_charts(df, visual_plan))
-    if len(charts) >= 2:
+    planned = _build_planned_charts(df, visual_plan)
+    if planned:
+        charts.extend(planned)
+    if len(charts) >= 4:
         return charts[:4]
 
     # ── CHART A: Binary target → violin per top-differentiating feature ────────
-    if bin_cols and len(num_cols) >= 2:
+    if len(charts) < 4 and bin_cols and len(num_cols) >= 2:
         target     = bin_cols[0]
         non_target = [c for c in num_cols if c != target]
         c0 = df[df[target] == 0]
@@ -331,7 +341,7 @@ def build_charts(report_data: dict) -> list:
             charts.append({"title": f"Feature Distributions by {target}", "buf": _save(fig), "interpretation": interp})
 
     # ── CHART B: Time series if datetime exists ────────────────────────────────
-    elif dt_cols and num_cols:
+    if len(charts) < 4 and dt_cols and num_cols:
         try:
             dt_col = dt_cols[0]
             df[dt_col] = pd.to_datetime(df[dt_col], errors="coerce")
@@ -373,7 +383,7 @@ def build_charts(report_data: dict) -> list:
             pass
 
     # ── CHART C: Scatter of strongest correlated pair with regression line ─────
-    if corr_map and len(num_cols) >= 2:
+    if len(charts) < 4 and corr_map and len(num_cols) >= 2:
         best_r, col_a, col_b = 0.0, None, None
         keys = list(corr_map.keys())
         for i, a in enumerate(keys):
@@ -430,7 +440,7 @@ def build_charts(report_data: dict) -> list:
                 charts.append({"title": f"Strongest Relationship: {col_a} vs {col_b}", "buf": _save(fig), "interpretation": interp})
 
     # ── CHART D: Category with biggest metric spread ───────────────────────────
-    if cat_cols and num_cols:
+    if len(charts) < 4 and cat_cols and num_cols:
         valid_cats = [(c, df[c].nunique()) for c in cat_cols if 2 <= df[c].nunique() <= 12]
         valid_cats.sort(key=lambda x: x[1])
         if valid_cats:

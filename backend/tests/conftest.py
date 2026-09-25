@@ -37,10 +37,12 @@ def setup_test_databases():
     import app.api.upload
     import app.api.reports
     import app.api.export_routes
+    import app.api.monitor_routes
     app.api.upload.reports_db = db.reports_db
     app.api.upload.jobs = db.jobs
     app.api.reports.reports_db = db.reports_db
     app.api.export_routes.reports_db = db.reports_db
+    app.api.monitor_routes.reports_db = db.reports_db
 
     yield
 

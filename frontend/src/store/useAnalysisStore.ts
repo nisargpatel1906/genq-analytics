@@ -6,22 +6,33 @@ export type JobProgressStatus = 'idle' | 'uploading' | 'mapping' | 'analyzing' |
 export interface AgentProgress {
   id: string;
   name: string;
-  status: 'running' | 'completed';
+  status: 'running' | 'completed' | 'failed' | 'pending';
   detail: string;
   round: number;
   score?: number;
+  timestamp?: string;
+}
+
+export interface PipelineStageDef {
+  id: string;
+  name: string;
+  phase: string;
+  description: string;
 }
 
 export interface BackendJobStatus {
   step: number;
   status: string;
+  current_agent?: string;
   report_id: string | null;
   rows?: number;
   columns?: number;
   agent_progress?: AgentProgress[];
+  pipeline_stages?: PipelineStageDef[];
   audit_score?: number;
   regeneration_round?: number;
   error?: string;
+  cancelled?: boolean;
 }
 
 export interface ChartItem {
@@ -69,6 +80,18 @@ export interface ReportData {
     keyFindings?: { title?: string; finding?: string; detail?: string; description?: string; confidenceScore?: number; confidence?: number; effect_size?: string; practical_significance?: string; impact_score?: number }[];
     anomalies?: { column?: string; severity?: string; description?: string; businessImpact?: string }[];
     recommendations?: { action?: string; rationale?: string; priority?: string; expected_outcome?: string }[];
+    strategic_brief?: any;
+    causal_analysis?: any;
+    forecast?: any;
+    anomaly_detection?: any;
+    strategic_recommendations?: any;
+    executive_headline?: string;
+    data_cleaning_manifest?: any;
+    investigation_plan?: any;
+    ml_predictive_modeling?: any;
+    relational_manifest?: any;
+    experiment_results?: any;
+    [key: string]: any;
     _meta?: {
       agentWorkflow?: {
         approved?: boolean;
@@ -107,6 +130,9 @@ interface AnalysisState {
   jobStatus: BackendJobStatus | null;
   jobError: string | null;
 
+  pipelineStages: PipelineStageDef[];
+  currentAgent: string | null;
+
   // Report Tracking
   currentReportId: string | null;
   currentReportData: ReportData | null;
@@ -126,9 +152,12 @@ interface AnalysisState {
   setErrorMessage: (msg: string) => void;
   setDataMeta: (meta: { rows: number; columns: number } | null) => void;
   setAgentProgress: (progress: AgentProgress[]) => void;
+  setPipelineStages: (stages: PipelineStageDef[]) => void;
+  setCurrentAgent: (agent: string | null) => void;
   setAuditScore: (score: number | null) => void;
   setJobStatus: (status: BackendJobStatus | null) => void;
   setJobError: (error: string | null) => void;
+  applyJobUpdate: (jobData: BackendJobStatus) => void;
   clearJobState: () => void;
 
   // Report Actions
@@ -160,6 +189,8 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
   errorMessage: '',
   dataMeta: null,
   agentProgress: [],
+  pipelineStages: [],
+  currentAgent: null,
   auditScore: null,
   jobStatus: null,
   jobError: null,
@@ -189,9 +220,43 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
   setErrorMessage: (errorMessage) => set({ errorMessage }),
   setDataMeta: (dataMeta) => set({ dataMeta }),
   setAgentProgress: (agentProgress) => set({ agentProgress }),
+  setPipelineStages: (pipelineStages) => set({ pipelineStages }),
+  setCurrentAgent: (currentAgent) => set({ currentAgent }),
   setAuditScore: (auditScore) => set({ auditScore }),
   setJobStatus: (jobStatus) => set({ jobStatus }),
   setJobError: (jobError) => set({ jobError }),
+  applyJobUpdate: (jobData) => {
+    const isComplete = jobData.status === 'Complete' || jobData.step === 3 || jobData.step === 4;
+    const isError = jobData.status === 'Failed' || !!jobData.error;
+    const isCancelled = jobData.status === 'Cancelled' || !!jobData.cancelled;
+
+    const stages = (jobData.pipeline_stages && jobData.pipeline_stages.length > 0)
+      ? jobData.pipeline_stages
+      : get().pipelineStages;
+    const agentList = jobData.agent_progress || [];
+    const completedCount = agentList.filter((a) => a.status === 'completed').length;
+    const totalStages = Math.max(stages.length, 14);
+    const activeBonus = jobData.current_agent ? 0.5 : 0;
+    const computedPct = isComplete
+      ? 100
+      : Math.min(Math.round(((completedCount + activeBonus) / totalStages) * 100), 98);
+
+    set((state) => ({
+      jobStatus: jobData,
+      backendStatus: jobData.status || state.backendStatus,
+      currentAgent: jobData.current_agent !== undefined ? jobData.current_agent : state.currentAgent,
+      agentProgress: agentList.length > 0 ? agentList : state.agentProgress,
+      pipelineStages: stages.length > 0 ? stages : state.pipelineStages,
+      auditScore: typeof jobData.audit_score === 'number' ? jobData.audit_score : state.auditScore,
+      dataMeta: (jobData.rows && jobData.columns)
+        ? { rows: jobData.rows, columns: jobData.columns }
+        : state.dataMeta,
+      progress: computedPct,
+      status: isComplete ? 'complete' : isError ? 'error' : isCancelled ? 'error' : 'analyzing',
+      errorMessage: isError ? (jobData.error || 'Analysis failed.') : state.errorMessage,
+      jobError: isError ? (jobData.error || 'Analysis failed.') : state.jobError,
+    }));
+  },
   clearJobState: () => set({
     jobId: null,
     status: 'idle',
@@ -200,6 +265,8 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
     errorMessage: '',
     dataMeta: null,
     agentProgress: [],
+    pipelineStages: [],
+    currentAgent: null,
     auditScore: null,
     jobStatus: null,
     jobError: null,

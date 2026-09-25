@@ -3,7 +3,8 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
   Download, Settings, AlertTriangle, Target,
   X, Loader2, ChevronRight, BarChart2, BookOpen,
-  TrendingUp, Zap, GitBranch, Users, AlertCircle, Clock
+  TrendingUp, Zap, GitBranch, Users, AlertCircle, Clock,
+  Database, Star, Award, Shield
 } from 'lucide-react';
 import { Link, useParams } from 'react-router-dom';
 import { Button } from '../components/ui/Button';
@@ -152,6 +153,12 @@ export function Report() {
   const strategicRecs = ai.strategic_recommendations || strategicBrief.recommendations || [];
   const execHeadline = ai.executive_headline || strategicBrief.executive_headline || '';
   const segments = anomalyDetection.segments || [];
+  // NEW agent data
+  const cohortAnalysis = ai.cohort_analysis || {};
+  const benchmarkAnalysis = ai.benchmark_analysis || {};
+  const dataQualityGate = ai.data_quality_gate || {};
+  const presentationOutline = ai.presentation_outline || {};
+  const mlResults = ai.ml_predictive_modeling || {};
 
   return (
     <div className="w-full bg-[#FAFAFA] min-h-full py-12 px-6 font-body" style={{ color: fontColor }}>
@@ -209,6 +216,22 @@ export function Report() {
                     <BookOpen className="w-4 h-4" /> Download Notebook
                   </Button>
                 </a>
+                <a href={`${API_URL}/api/export/${id}/pptx`} target="_blank" rel="noreferrer">
+                  <Button variant="outlined" className="gap-2 border-violet-500 text-violet-700 hover:bg-violet-50">
+                    <Download className="w-4 h-4" /> Download PPTX {presentationOutline?.slides?.length ? `(${presentationOutline.slides.length} slides)` : ''}
+                  </Button>
+                </a>
+                {/* Quick navigation to new pages */}
+                <Link to={`/reports/${id}/insights`}>
+                  <Button variant="outlined" className="gap-2 border-amber-400 text-amber-700 hover:bg-amber-50">
+                    <Star className="w-4 h-4" /> Insights Feed
+                  </Button>
+                </Link>
+                <Link to={`/reports/${id}/playground`}>
+                  <Button variant="outlined" className="gap-2 border-emerald-400 text-emerald-700 hover:bg-emerald-50">
+                    <Database className="w-4 h-4" /> Data Playground
+                  </Button>
+                </Link>
               </>
             )}
           </div>
@@ -1057,6 +1080,135 @@ export function Report() {
         )}
 
       </div>
+
+
+        {/* DATA QUALITY GATE */}
+        {dataQualityGate && dataQualityGate.score !== undefined && (
+          <section>
+            <div className="flex items-center gap-2 mb-5">
+              <Shield className="w-5 h-5" style={{ color: accentColor }} />
+              <h2 className="font-heading text-[24px] font-semibold">Data Quality Gate</h2>
+            </div>
+            <div className="p-5 rounded-[12px] border border-border bg-white shadow-sm">
+              <div className="flex items-center gap-6 mb-4">
+                <div className="text-center">
+                  <div className={`text-[48px] font-black leading-none ${dataQualityGate.score >= 60 ? 'text-emerald-600' : dataQualityGate.score >= 40 ? 'text-amber-500' : 'text-red-600'}`}>
+                    {dataQualityGate.score}
+                  </div>
+                  <div className="text-[11px] text-fg/40 mt-1">/ 100</div>
+                </div>
+                <div className="flex-1">
+                  <span className={`inline-flex items-center gap-1 px-3 py-1 rounded-full text-[12px] font-bold mb-2 ${dataQualityGate.decision === 'PASS' ? 'bg-emerald-100 text-emerald-700' : dataQualityGate.decision === 'WARN' ? 'bg-amber-100 text-amber-700' : 'bg-red-100 text-red-700'}`}>
+                    {dataQualityGate.decision}
+                  </span>
+                  <div className="w-full bg-gray-100 rounded-full h-2 mt-1">
+                    <div className="h-2 rounded-full" style={{ width: `${dataQualityGate.score}%`, backgroundColor: dataQualityGate.score >= 60 ? '#22c55e' : dataQualityGate.score >= 40 ? '#f59e0b' : '#ef4444' }} />
+                  </div>
+                </div>
+              </div>
+              {dataQualityGate.issues && dataQualityGate.issues.length > 0 && (
+                <div className="space-y-2 mt-3 pt-3 border-t border-border">
+                  {dataQualityGate.issues.map((issue: any, i: number) => (
+                    <div key={i} className="flex items-start gap-2 text-[13px]">
+                      <AlertTriangle className="w-4 h-4 text-amber-500 mt-0.5 shrink-0" />
+                      <span className="text-fg/70">{issue.description || String(issue)}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </section>
+        )}
+
+        {/* COHORT ANALYSIS */}
+        {cohortAnalysis && cohortAnalysis.summary && (
+          <section>
+            <div className="flex items-center gap-2 mb-5">
+              <Users className="w-5 h-5" style={{ color: accentColor }} />
+              <h2 className="font-heading text-[24px] font-semibold">Cohort & Retention Analysis</h2>
+            </div>
+            <div className="p-5 rounded-[12px] border border-border bg-white shadow-sm space-y-4">
+              <p className="text-[14px] leading-[1.75] text-fg/80">{cohortAnalysis.summary}</p>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                {cohortAnalysis.churn_rate_overall !== undefined && (
+                  <div className="p-3 rounded-lg bg-red-50 border border-red-100 text-center">
+                    <p className="text-[22px] font-black text-red-600">{(cohortAnalysis.churn_rate_overall * 100).toFixed(1)}%</p>
+                    <p className="text-[11px] text-red-500 mt-0.5">Overall Churn Rate</p>
+                  </div>
+                )}
+                {cohortAnalysis.avg_retention_week1 !== undefined && (
+                  <div className="p-3 rounded-lg bg-emerald-50 border border-emerald-100 text-center">
+                    <p className="text-[22px] font-black text-emerald-600">{(cohortAnalysis.avg_retention_week1 * 100).toFixed(1)}%</p>
+                    <p className="text-[11px] text-emerald-500 mt-0.5">Week 1 Retention</p>
+                  </div>
+                )}
+              </div>
+            </div>
+          </section>
+        )}
+
+        {/* BENCHMARKING */}
+        {benchmarkAnalysis && benchmarkAnalysis.benchmark_summary && (
+          <section>
+            <div className="flex items-center gap-2 mb-5">
+              <Award className="w-5 h-5" style={{ color: accentColor }} />
+              <h2 className="font-heading text-[24px] font-semibold">Industry Benchmarking</h2>
+            </div>
+            <div className="space-y-3">
+              <div className="p-4 rounded-[12px] border border-amber-200/60 bg-amber-50/60">
+                <p className="text-[14px] text-fg/80 leading-[1.75]">{benchmarkAnalysis.benchmark_summary}</p>
+              </div>
+              {benchmarkAnalysis.benchmarks && benchmarkAnalysis.benchmarks.map((b: any, i: number) => {
+                const verdictColor = b.verdict && b.verdict.includes('Above') ? '#22c55e' : b.verdict && b.verdict.includes('Below') ? '#ef4444' : '#f59e0b';
+                return (
+                  <div key={i} className="p-4 rounded-lg border border-border bg-white flex items-start justify-between gap-4">
+                    <div className="flex-1">
+                      <p className="text-[14px] font-semibold">{b.metric_name}</p>
+                      <p className="text-[12px] text-fg/50 mt-0.5">Observed: <strong>{b.observed_value}</strong> vs Industry: {b.industry_average}</p>
+                    </div>
+                    <span className="text-[11px] font-bold px-2.5 py-1 rounded-full shrink-0" style={{ backgroundColor: verdictColor + '20', color: verdictColor }}>{b.verdict}</span>
+                  </div>
+                );
+              })}
+            </div>
+          </section>
+        )}
+
+        {/* ML PREDICTIVE MODELING */}
+        {mlResults && mlResults.summary && (
+          <section>
+            <div className="flex items-center gap-2 mb-5">
+              <BarChart2 className="w-5 h-5" style={{ color: accentColor }} />
+              <h2 className="font-heading text-[24px] font-semibold">ML Predictive Modeling</h2>
+            </div>
+            <div className="p-5 rounded-[12px] border border-border bg-white shadow-sm space-y-4">
+              <div>
+                <p className="text-[14px] font-semibold">{mlResults.model_name || 'Trained Model'} — Target: {mlResults.target_column}</p>
+                <p className="text-[14px] leading-[1.75] text-fg/80 mt-2">{mlResults.summary}</p>
+              </div>
+              {mlResults.feature_importances && mlResults.feature_importances.length > 0 && (
+                <div className="pt-3 border-t border-border">
+                  <p className="text-[12px] font-semibold text-fg/60 uppercase tracking-wider mb-2">Top Predictive Drivers</p>
+                  <div className="space-y-2">
+                    {mlResults.feature_importances.slice(0, 5).map((fi: any, i: number) => {
+                      const maxImp = mlResults.feature_importances[0]?.importance || 1;
+                      const pct = Math.round((fi.importance / maxImp) * 100);
+                      return (
+                        <div key={i} className="flex items-center gap-3">
+                          <span className="text-[12px] text-fg/70 w-40 shrink-0 truncate">{fi.feature}</span>
+                          <div className="flex-1 bg-gray-100 rounded-full h-1.5">
+                            <div className="h-1.5 rounded-full" style={{ width: pct + '%', backgroundColor: accentColor }} />
+                          </div>
+                          <span className="text-[11px] font-mono text-fg/50 w-12 text-right">{typeof fi.importance === 'number' ? fi.importance.toFixed(3) : fi.importance}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
+          </section>
+        )}
 
       {/* CUSTOMIZATION MODAL */}
       <AnimatePresence>

@@ -7,6 +7,9 @@ import { Library } from './pages/Library';
 import { Methodology } from './pages/Methodology';
 import { DataPrivacy } from './pages/Privacy';
 import { TermsOfService } from './pages/Terms';
+import { Insights } from './pages/Insights';
+import { Compare } from './pages/Compare';
+import { DataPlayground } from './pages/DataPlayground';
 import { Navbar } from './components/layout/Navbar';
 import { Footer } from './components/layout/Footer';
 
@@ -25,6 +28,12 @@ function App() {
             <Route path="/methodology" element={<Methodology />} />
             <Route path="/privacy" element={<DataPrivacy />} />
             <Route path="/terms" element={<TermsOfService />} />
+            {/* New pages — Full Analytics Team Replacement */}
+            <Route path="/insights/:id?" element={<Insights />} />
+            <Route path="/reports/:id/insights" element={<Insights />} />
+            <Route path="/compare" element={<Compare />} />
+            <Route path="/playground/:id?" element={<DataPlayground />} />
+            <Route path="/reports/:id/playground" element={<DataPlayground />} />
           </Routes>
         </main>
         <Footer />

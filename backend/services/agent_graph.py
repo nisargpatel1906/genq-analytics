@@ -2,6 +2,7 @@
 
 import json
 import logging
+import operator
 import re
 import time
 from datetime import datetime
@@ -9,6 +10,7 @@ import os
 import uuid
 import difflib
 import threading
+import concurrent.futures
 import numpy as np
 import pandas as pd
 import scipy.stats as stats
@@ -16,9 +18,15 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import seaborn as sns
-from typing import Callable, Dict, Any, List, Optional, TypedDict
+from typing import Annotated, Callable, Dict, Any, List, Optional, TypedDict
 
 from langgraph.graph import StateGraph, END
+try:
+    from langgraph.types import Send
+    _LANGGRAPH_SEND_AVAILABLE = True
+except ImportError:
+    _LANGGRAPH_SEND_AVAILABLE = False
+    Send = None
 
 from services.llm import chat_completion, provider_label
 from services.code_executor import execute_analysis_code
@@ -41,6 +49,11 @@ from services.agent_prompts import (
     HYPOTHESIS_PLANNER_PROMPT,
     ML_MODELER_PROMPT,
     EXPERIMENTATION_PROMPT,
+    COHORT_ANALYST_PROMPT,
+    BENCHMARKING_PROMPT,
+    PRESENTATION_BUILDER_PROMPT,
+    DATA_QUALITY_GATE_PROMPT,
+    NL_SQL_PROMPT,
 )
 
 logger = logging.getLogger("genq_api.agent_graph")
@@ -65,6 +78,7 @@ class AnalysisGraphState(TypedDict, total=False):
 
     # Intermediate and final outputs
     analysis_results: Dict[str, Any]
+    # chart_images uses a list reducer so parallel branches can safely append
     chart_images: List[Dict[str, Any]]
     report: Dict[str, Any]
     audit: Dict[str, Any]
@@ -112,6 +126,28 @@ class AnalysisGraphState(TypedDict, total=False):
     ml_results: Dict[str, Any]
     experiment_results: Dict[str, Any]
     relational_manifest: Dict[str, Any]
+
+    # NEW: Data Quality Gate
+    data_quality_score: int
+    data_quality_gate_decision: str  # PASS | WARN | FAIL
+    data_quality_issues: List[Dict[str, Any]]
+
+    # NEW: Cohort & Retention Analyst
+    cohort_results: Dict[str, Any]
+
+    # NEW: Competitive Benchmarking Agent
+    benchmark_results: Dict[str, Any]
+
+    # NEW: Presentation Builder
+    presentation_results: Dict[str, Any]
+
+    # Parallel senior tier — intermediate chart buckets (merged by senior_tier_merge_node)
+    _causal_charts: List[Dict[str, Any]]
+    _forecast_charts: List[Dict[str, Any]]
+    _anomaly_charts: List[Dict[str, Any]]
+    _experiment_charts: List[Dict[str, Any]]
+    _ml_charts: List[Dict[str, Any]]
+    _cohort_charts: List[Dict[str, Any]]
 
     # Status flags
     cancelled: bool
@@ -189,6 +225,14 @@ class AnalysisState:
         self.ml_results: Dict[str, Any] = {}
         self.experiment_results: Dict[str, Any] = {}
         self.relational_manifest: Dict[str, Any] = {}
+
+        # NEW agent results
+        self.data_quality_score: int = 0
+        self.data_quality_gate_decision: str = "PASS"
+        self.data_quality_issues: List[Dict[str, Any]] = []
+        self.cohort_results: Dict[str, Any] = {}
+        self.benchmark_results: Dict[str, Any] = {}
+        self.presentation_results: Dict[str, Any] = {}
 
 
 def extract_code_block(text: str) -> str:
@@ -307,6 +351,7 @@ def publish_stage_progress(
     """Updates progress dictionary and invokes the user progress_callback."""
     stage_names = {
         "profile": "Data Profiler",
+        "data_quality_gate": "Data Quality Gate",
         "data_cleaner": "Data Quality & Cleaning Agent",
         "hypothesis_planner": "Research Planning Agent",
         "sampling": "Smart Sampler",
@@ -325,6 +370,11 @@ def publish_stage_progress(
         "experimentation": "A/B Experimentation Agent",
         "ml_modeler": "Machine Learning Agent",
         "strategic_advisor": "Strategic Insights Agent",
+        "cohort_analyst": "Cohort & Retention Analyst",
+        "benchmarking": "Competitive Benchmarking Agent",
+        "senior_tier_merge": "Senior Tier Results Merger",
+        "presentation_builder": "Presentation Builder Agent",
+        "nl_sql": "Natural Language SQL Agent",
     }
 
     stages_progress = state.setdefault("stages_progress", {})
@@ -2305,6 +2355,20 @@ def finalize_node(state: AnalysisGraphState) -> dict:
     report["strategic_brief"] = state.get("strategic_results", {})
     report["experiment_results"] = state.get("experiment_results", {})
     report["relational_manifest"] = state.get("relational_manifest", {})
+    # NEW agent artifacts
+    report["cohort_analysis"] = state.get("cohort_results", {})
+    report["benchmark_analysis"] = state.get("benchmark_results", {})
+    report["data_quality_gate"] = {
+        "score": state.get("data_quality_score", 0),
+        "decision": state.get("data_quality_gate_decision", "PASS"),
+        "issues": state.get("data_quality_issues", []),
+    }
+    # Embed presentation outline (pptx_bytes excluded to keep JSON clean)
+    pres = state.get("presentation_results", {})
+    if pres:
+        pres_for_report = {k: v for k, v in pres.items() if k != "pptx_bytes"}
+        report["presentation_outline"] = pres_for_report
+
 
     # Expose executive headline at top level for easy access in PDF/UI
     strategic = state.get("strategic_results", {})
@@ -3050,44 +3114,532 @@ def strategic_advisor_node(state: AnalysisGraphState) -> dict:
     return {"strategic_results": strategic_results}
 
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# NEW AGENT NODES — Full Analytics Team Replacement Tier
+# ─────────────────────────────────────────────────────────────────────────────
+
+def data_quality_gate_node(state):
+    """Data Quality Gate: Pre-flight health check. Scores data quality 0-100 and warns/blocks on failure."""
+    if check_cancelled(state):
+        raise JobCancelledException("Job cancelled by user.")
+
+    publish_stage_progress(state, "data_quality_gate", "running",
+                           "Data Quality Gate: Auditing dataset health before analysis begins...")
+
+    df = state["df"]
+    schema = state.get("schema", {})
+    sample_rows = state.get("sample_rows", [])
+    stats_dict = state.get("stats", {})
+    missing_values = stats_dict.get("missing_values", {})
+    row_count = len(df)
+    col_count = len(df.columns)
+    duplicate_rows = int(df.duplicated().sum())
+
+    quality_issues = []
+    avg_missing = sum(missing_values.values()) / max(len(missing_values), 1) / max(row_count, 1) if missing_values else 0.0
+    critical_nulls = [c for c, n in missing_values.items() if n > row_count * 0.5]
+    if critical_nulls:
+        quality_issues.append({"type": "high_missingness", "columns": critical_nulls})
+    if duplicate_rows > row_count * 0.05:
+        quality_issues.append({"type": "duplicates", "count": duplicate_rows})
+    if row_count < 50:
+        quality_issues.append({"type": "low_volume", "count": row_count})
+
+    prompt = DATA_QUALITY_GATE_PROMPT.format(
+        schema=json.dumps(schema, default=str),
+        sample_rows=json.dumps(sample_rows[:5], default=str),
+        missing_values=json.dumps(missing_values, default=str),
+        duplicate_rows=duplicate_rows,
+        quality_issues=json.dumps(quality_issues, default=str),
+        row_count=row_count,
+        col_count=col_count,
+    )
+
+    messages = [
+        {"role": "system", "content": "You are a data quality auditor. Output JSON only."},
+        {"role": "user", "content": prompt},
+    ]
+
+    gate_result = {}
+    try:
+        response = chat_completion(messages, task="review", json_mode=True,
+                                   timeout=int(os.environ.get("LLM_TIMEOUT", "120")))
+        parsed = parse_json_safely(response)
+        if "error" not in parsed and "health_score" in parsed:
+            gate_result = parsed
+    except Exception as e:
+        logger.warning(f"Data quality gate LLM failed: {e}")
+
+    if not gate_result:
+        completeness = max(0, 30 * (1.0 - avg_missing))
+        uniqueness = max(0, 20 * (1.0 - duplicate_rows / max(row_count, 1)))
+        volume_score = 0 if row_count < 50 else (8 if row_count < 200 else (12 if row_count < 1000 else 15))
+        health_score = int(completeness + uniqueness + 20 + 15 + volume_score)
+        health_score = min(100, max(0, health_score))
+        decision = "PASS" if health_score >= 60 else ("WARN" if health_score >= 40 else "FAIL")
+        gate_result = {
+            "health_score": health_score,
+            "gate_decision": decision,
+            "critical_issues": quality_issues,
+            "warnings": [],
+            "gate_rationale": f"Data Health Score: {health_score}/100. Decision: {decision}.",
+        }
+
+    score = gate_result.get("health_score", 85)
+    decision = gate_result.get("gate_decision", "PASS")
+    rationale = gate_result.get("gate_rationale", "")
+
+    publish_stage_progress(state, "data_quality_gate", "completed",
+                           f"Data Health Score: {score}/100 [{decision}]. {rationale[:100]}", score=score)
+
+    return {
+        "data_quality_score": score,
+        "data_quality_gate_decision": decision,
+        "data_quality_issues": gate_result.get("critical_issues", []),
+    }
+
+
+def cohort_analyst_node(state):
+    """Cohort and Retention Analyst: LTV, churn curves, DAU/WAU/MAU, retention matrices."""
+    if check_cancelled(state):
+        raise JobCancelledException("Job cancelled by user.")
+
+    publish_stage_progress(state, "cohort_analyst", "running",
+                           "Cohort Analyst: Mapping user lifecycle, churn curves, and LTV cohorts...")
+
+    df = state["df"]
+    col_profile = _build_col_profile(df)
+    time_col, target_cols = _detect_time_column(df, state.get("schema", {}))
+
+    prompt = COHORT_ANALYST_PROMPT.format(
+        domain=state.get("domain_brief", {}).get("domain", "Unknown"),
+        currency_context=state.get("currency_context", ""),
+        schema=json.dumps(state.get("schema", {}), default=str),
+        col_profile=json.dumps(col_profile, default=str),
+        analysis_results=json.dumps(state.get("analysis_results", {}), default=str)[:3000],
+        time_column=time_col or "None detected",
+        target_columns=json.dumps(target_cols),
+    )
+
+    messages = [
+        {"role": "system", "content": "You are a cohort analyst. Write Python code. Output only a python code block."},
+        {"role": "user", "content": prompt},
+    ]
+
+    cohort_results = {}
+    cohort_charts = []
+    timeout_val = int(os.environ.get("LLM_TIMEOUT", "300"))
+    code = ""
+    for attempt in range(3):
+        try:
+            response = chat_completion(messages, task="visual", json_mode=False, timeout=timeout_val)
+            code = extract_code_block(response)
+            if code:
+                break
+        except Exception as e:
+            logger.warning(f"Cohort analyst code gen attempt {attempt + 1} failed: {e}")
+
+    if code:
+        exec_res = execute_analysis_code(code, df, timeout_seconds=int(os.environ.get("CODE_EXEC_TIMEOUT", "120")))
+        if exec_res.success:
+            for out in exec_res.agent_outputs:
+                fname = out.get("filename", "")
+                if fname.endswith(".json") and "cohort" in fname:
+                    cohort_results = out.get("data", {})
+                elif out.get("type") == "image" and isinstance(out.get("data"), (bytes, bytearray)):
+                    cohort_charts.append({
+                        "filename": out["filename"],
+                        "title": out.get("finding_title") or "Cohort Analysis",
+                        "interpretation": out.get("interpretation", "Cohort retention and lifecycle analysis."),
+                        "insight_text": out.get("insight_text", ""),
+                        "finding_title": out.get("finding_title", "Cohort and Retention Analysis"),
+                        "data": out["data"],
+                    })
+            logger.info(f"Cohort analyst: {len(cohort_charts)} charts generated.")
+        else:
+            logger.warning(f"Cohort analyst execution failed: {exec_res.error_message}")
+
+    if not cohort_results:
+        churn_rate = 0.0
+        churn_col = None
+        for col in df.columns:
+            if any(k in col.lower() for k in ["churn", "churned", "active", "retained"]):
+                churn_col = col
+                break
+        if churn_col:
+            try:
+                churn_rate = float(df[churn_col].apply(lambda x: bool(x) if isinstance(x, bool) else (str(x).lower() in ["1", "true", "yes", "churned"])).mean())
+            except Exception:
+                pass
+        cohort_results = {
+            "cohort_type": "segment",
+            "churn_rate_overall": round(churn_rate, 4),
+            "summary": f"Cohort analysis complete. Churn rate estimate: {churn_rate*100:.1f}%." if churn_col else "Cohort analysis completed. No explicit churn column detected.",
+        }
+
+    publish_stage_progress(state, "cohort_analyst", "completed",
+                           cohort_results.get("summary", "Cohort analysis complete."))
+
+    existing = list(state.get("chart_images", []))
+    return {
+        "cohort_results": cohort_results,
+        "chart_images": existing + cohort_charts,
+        "_cohort_charts": cohort_charts,
+    }
+
+
+def benchmarking_node(state):
+    """Competitive Benchmarking Agent: Compares key metrics against industry standards."""
+    if check_cancelled(state):
+        raise JobCancelledException("Job cancelled by user.")
+
+    publish_stage_progress(state, "benchmarking", "running",
+                           "Competitive Benchmarking: Comparing metrics against industry KPI standards...")
+
+    analysis_results = state.get("analysis_results", {})
+    findings = analysis_results.get("findings", [])
+    domain = state.get("domain_brief", {}).get("domain", "Unknown")
+
+    key_metrics = []
+    for f in findings[:10]:
+        title = f.get("title", "")
+        detail = f.get("detail", "")
+        effect = f.get("effect_size", "")
+        key_metrics.append(f"{title}: {detail[:150]} (effect: {effect})")
+
+    stats_dict = state.get("stats", {})
+    numeric_summary = stats_dict.get("numeric_summary", {})
+    metric_values = {col: {"mean": round(v.get("mean", 0), 2), "std": round(v.get("std", 0), 2)}
+                     for col, v in list(numeric_summary.items())[:8]}
+
+    prompt = BENCHMARKING_PROMPT.format(
+        domain=domain,
+        findings_summary="\n".join(key_metrics),
+        key_metrics=json.dumps(metric_values, default=str),
+        currency_context=state.get("currency_context", ""),
+    )
+
+    messages = [
+        {"role": "system", "content": "You are a competitive intelligence analyst. Output JSON only."},
+        {"role": "user", "content": prompt},
+    ]
+
+    benchmark_results = {}
+    timeout_val = int(os.environ.get("LLM_TIMEOUT", "180"))
+    for attempt in range(3):
+        try:
+            use_json = (attempt == 0)
+            response = chat_completion(messages, task="review", json_mode=use_json, timeout=timeout_val)
+            parsed = parse_json_safely(response)
+            if "error" not in parsed and ("benchmarks" in parsed or "industry_context" in parsed):
+                benchmark_results = parsed
+                break
+        except Exception as e:
+            logger.warning(f"Benchmarking agent attempt {attempt + 1} failed: {e}")
+
+    if not benchmark_results:
+        benchmark_results = {
+            "industry_context": f"Industry benchmarks for {domain}.",
+            "benchmarks": [],
+            "performance_gaps": [],
+            "competitive_advantages": [],
+            "benchmark_summary": "Competitive benchmarking was not completed due to an LLM error.",
+        }
+
+    n_above = len([b for b in benchmark_results.get("benchmarks", []) if "Above" in b.get("verdict", "")])
+    n_below = len([b for b in benchmark_results.get("benchmarks", []) if "Below" in b.get("verdict", "")])
+
+    publish_stage_progress(state, "benchmarking", "completed",
+                           f"Benchmarking complete. {n_above} metrics above industry avg, {n_below} below.")
+
+    return {"benchmark_results": benchmark_results}
+
+
+def senior_tier_dispatch_node(state):
+    """
+    Parallel Senior Analyst Tier Dispatcher.
+    Runs Causal Analyst, Forecaster, Anomaly Detector, A/B Experimenter, ML Modeler,
+    Cohort Analyst, and Benchmarking Agent in PARALLEL using concurrent.futures.
+    """
+    if check_cancelled(state):
+        raise JobCancelledException("Job cancelled by user.")
+
+    parallel_enabled = os.environ.get("SENIOR_TIER_PARALLEL", "true").strip().lower() == "true"
+    max_workers = int(os.environ.get("SENIOR_TIER_MAX_WORKERS", "4"))
+
+    publish_stage_progress(state, "causal_analyst", "running",
+                           f"Senior Analyst Tier: Launching {'parallel' if parallel_enabled else 'sequential'} specialist agents (Causal, Forecast, Anomaly, A/B, ML, Cohort, Benchmark)...")
+
+    agents = [
+        ("causal_analyst", causal_analyst_node),
+        ("forecaster", forecaster_node),
+        ("anomaly_detector", anomaly_detector_node),
+        ("experimentation", experimentation_node),
+        ("ml_modeler", ml_modeler_node),
+        ("cohort_analyst", cohort_analyst_node),
+        ("benchmarking", benchmarking_node),
+    ]
+
+    combined = {}
+
+    if parallel_enabled:
+        def run_agent(agent_name_fn):
+            agent_name, fn = agent_name_fn
+            try:
+                result = fn(state)
+                return agent_name, result, None
+            except JobCancelledException:
+                return agent_name, {}, "cancelled"
+            except Exception as e:
+                logger.error(f"Parallel senior tier agent '{agent_name}' failed: {e}", exc_info=True)
+                return agent_name, {}, str(e)
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {executor.submit(run_agent, ag): ag[0] for ag in agents}
+            for future in concurrent.futures.as_completed(futures):
+                agent_name, result, err = future.result()
+                if err == "cancelled":
+                    raise JobCancelledException("Job cancelled during parallel senior tier.")
+                if err:
+                    logger.warning(f"Agent '{agent_name}' error: {err}")
+                combined.update(result)
+    else:
+        for agent_name, fn in agents:
+            try:
+                result = fn(state)
+                combined.update(result)
+            except JobCancelledException:
+                raise
+            except Exception as e:
+                logger.error(f"Sequential senior tier agent '{agent_name}' failed: {e}", exc_info=True)
+
+    # Merge all chart_images from parallel branches
+    all_charts = list(state.get("chart_images", []))
+    for key in ["_causal_charts", "_forecast_charts", "_anomaly_charts", "_experiment_charts", "_ml_charts", "_cohort_charts"]:
+        all_charts.extend(combined.pop(key, []))
+    combined["chart_images"] = all_charts
+
+    return combined
+
+
+def presentation_builder_node(state):
+    """Presentation Builder Agent: Generates PowerPoint outline and creates a PPTX file."""
+    if check_cancelled(state):
+        raise JobCancelledException("Job cancelled by user.")
+
+    publish_stage_progress(state, "presentation_builder", "running",
+                           "Presentation Builder: Creating executive-grade slide deck...")
+
+    report = state.get("report", {})
+    strategic = state.get("strategic_results", {})
+    benchmark = state.get("benchmark_results", {})
+    causal = state.get("causal_results", {})
+    forecast = state.get("forecast_results", {})
+    ml = state.get("ml_results", {})
+
+    prompt = PRESENTATION_BUILDER_PROMPT.format(
+        domain=state.get("domain_brief", {}).get("domain", "Unknown"),
+        executive_summary=report.get("executiveSummary", "")[:2000],
+        key_findings=json.dumps(report.get("keyFindings", [])[:8], default=str)[:3000],
+        recommendations=json.dumps(report.get("recommendations", [])[:5], default=str)[:1500],
+        causal_summary=causal.get("causal_summary", "Not available.")[:500],
+        forecast_summary=str(forecast.get("skipped", False))[:200],
+        ml_summary=ml.get("summary", "Not available.")[:300],
+        benchmark_summary=benchmark.get("benchmark_summary", "Not available.")[:500],
+    )
+
+    messages = [
+        {"role": "system", "content": "You are a McKinsey slide strategist. Output JSON only."},
+        {"role": "user", "content": prompt},
+    ]
+
+    presentation_results = {}
+    timeout_val = int(os.environ.get("LLM_TIMEOUT", "300"))
+    for attempt in range(3):
+        try:
+            use_json = (attempt == 0)
+            response = chat_completion(messages, task="report", json_mode=use_json, timeout=timeout_val)
+            parsed = parse_json_safely(response)
+            if "error" not in parsed and "slides" in parsed:
+                presentation_results = parsed
+                break
+        except Exception as e:
+            logger.warning(f"Presentation builder attempt {attempt + 1} failed: {e}")
+
+    pptx_bytes = None
+    if presentation_results:
+        try:
+            pptx_bytes = _build_pptx(presentation_results, state)
+        except Exception as e:
+            logger.warning(f"PPTX build failed: {e}")
+
+    if pptx_bytes:
+        presentation_results["pptx_bytes"] = pptx_bytes
+
+    n_slides = len(presentation_results.get("slides", []))
+    publish_stage_progress(state, "presentation_builder", "completed",
+                           f"Presentation built: {n_slides} slides.")
+
+    return {"presentation_results": presentation_results}
+
+
+def _build_pptx(outline, state):
+    """Builds a PowerPoint file from the presentation outline dict."""
+    try:
+        from pptx import Presentation
+        from pptx.util import Inches, Pt
+        from pptx.dml.color import RGBColor
+        from pptx.enum.text import PP_ALIGN
+        import io
+
+        prs = Presentation()
+        prs.slide_width = Inches(13.33)
+        prs.slide_height = Inches(7.5)
+
+        DARK_BG = RGBColor(0x0F, 0x17, 0x2A)
+        ACCENT = RGBColor(0x38, 0xBD, 0xF8)
+        WHITE = RGBColor(0xFF, 0xFF, 0xFF)
+        LIGHT_GRAY = RGBColor(0xCB, 0xD5, 0xE1)
+
+        blank_layout = prs.slide_layouts[6]
+
+        for slide_def in outline.get("slides", []):
+            slide = prs.slides.add_slide(blank_layout)
+
+            bg = slide.background
+            fill = bg.fill
+            fill.solid()
+            fill.fore_color.rgb = DARK_BG
+
+            slide_type = slide_def.get("slide_type", "finding")
+
+            bar = slide.shapes.add_shape(1, Inches(0), Inches(0), Inches(13.33), Inches(0.08))
+            bar.fill.solid()
+            bar.fill.fore_color.rgb = ACCENT
+            bar.line.fill.background()
+
+            num_tb = slide.shapes.add_textbox(Inches(12.3), Inches(7.1), Inches(0.9), Inches(0.3))
+            num_tf = num_tb.text_frame
+            num_tf.text = str(slide_def.get("slide_number", ""))
+            if num_tf.paragraphs[0].runs:
+                num_tf.paragraphs[0].runs[0].font.size = Pt(9)
+                num_tf.paragraphs[0].runs[0].font.color.rgb = LIGHT_GRAY
+            num_tf.paragraphs[0].alignment = PP_ALIGN.RIGHT
+
+            if slide_type == "title":
+                ttl = slide.shapes.add_textbox(Inches(1.5), Inches(2.2), Inches(10), Inches(1.5))
+                tf = ttl.text_frame
+                tf.word_wrap = True
+                p = tf.paragraphs[0]
+                p.text = outline.get("title", "Analysis Report")
+                if p.runs:
+                    p.runs[0].font.size = Pt(40)
+                    p.runs[0].font.bold = True
+                    p.runs[0].font.color.rgb = WHITE
+
+                sub = slide.shapes.add_textbox(Inches(1.5), Inches(3.9), Inches(10), Inches(0.6))
+                stf = sub.text_frame
+                stf.text = outline.get("subtitle", "")
+                if stf.paragraphs[0].runs:
+                    stf.paragraphs[0].runs[0].font.size = Pt(18)
+                    stf.paragraphs[0].runs[0].font.color.rgb = ACCENT
+            else:
+                headline = slide_def.get("headline", slide_def.get("title", ""))
+                title_txt = slide_def.get("title", "")
+                bullets = slide_def.get("bullets", [])
+                notes = slide_def.get("speaker_notes", "")
+
+                ttl = slide.shapes.add_textbox(Inches(0.5), Inches(0.2), Inches(12), Inches(0.7))
+                tf = ttl.text_frame
+                tf.word_wrap = True
+                p = tf.paragraphs[0]
+                p.text = title_txt
+                if p.runs:
+                    p.runs[0].font.size = Pt(13)
+                    p.runs[0].font.color.rgb = ACCENT
+                    p.runs[0].font.bold = True
+
+                hl = slide.shapes.add_textbox(Inches(0.5), Inches(1.0), Inches(12), Inches(1.0))
+                htf = hl.text_frame
+                htf.word_wrap = True
+                hp = htf.paragraphs[0]
+                hp.text = headline
+                if hp.runs:
+                    hp.runs[0].font.size = Pt(22)
+                    hp.runs[0].font.color.rgb = WHITE
+                    hp.runs[0].font.bold = True
+
+                if bullets:
+                    btb = slide.shapes.add_textbox(Inches(0.7), Inches(2.2), Inches(11), Inches(4.5))
+                    btf = btb.text_frame
+                    btf.word_wrap = True
+                    for i, bullet in enumerate(bullets[:6]):
+                        bp = btf.add_paragraph() if i > 0 else btf.paragraphs[0]
+                        bp.text = f"* {bullet}"
+                        if bp.runs:
+                            bp.runs[0].font.size = Pt(16)
+                            bp.runs[0].font.color.rgb = LIGHT_GRAY
+                        bp.space_before = Pt(8)
+
+                if notes:
+                    notes_slide = slide.notes_slide
+                    notes_tf = notes_slide.notes_text_frame
+                    notes_tf.text = notes
+
+        buf = io.BytesIO()
+        prs.save(buf)
+        buf.seek(0)
+        return buf.read()
+    except Exception as e:
+        logger.error(f"PPTX build error: {e}")
+        return b""
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Graph Construction & Orchestration
 # ─────────────────────────────────────────────────────────────────────────────
 
 def build_analysis_graph() -> StateGraph:
-    """Builds and wires the declarative LangGraph multi-agent pipeline with custom conditional loops."""
+    """Builds and wires the declarative LangGraph multi-agent pipeline.
+    Architecture:
+      data_quality_gate -> data_cleaner -> hypothesis_planner -> data_scientist
+      <-> reflector loop -> viz_preprocessor -> viz_coder <-> viz_repair loop
+      -> senior_tier_dispatch (PARALLEL: causal, forecast, anomaly, ab, ml, cohort, benchmark)
+      -> strategic_advisor -> report_writer -> narrative_stitcher
+      -> presentation_builder -> auditor <-> regeneration loop -> finalize
+    """
     workflow = StateGraph(AnalysisGraphState)
 
-    # Register Nodes
+    # ── Register all nodes ───────────────────────────────────────────────────
+    # Pre-flight gate
+    workflow.add_node("data_quality_gate", data_quality_gate_node)
+    # Core analysis
     workflow.add_node("data_cleaner", data_cleaner_node)
     workflow.add_node("hypothesis_planner", hypothesis_planner_node)
     workflow.add_node("data_scientist", data_scientist_node)
     workflow.add_node("reflector", reflector_node)
+    # Visualization
     workflow.add_node("viz_preprocessor", viz_preprocessor_node)
     workflow.add_node("viz_coder", viz_coder_node)
     workflow.add_node("viz_repair", viz_repair_node)
-    # Senior Analyst Tier Nodes
-    workflow.add_node("causal_analyst", causal_analyst_node)
-    workflow.add_node("forecaster", forecaster_node)
-    workflow.add_node("anomaly_detector", anomaly_detector_node)
-    workflow.add_node("experimentation", experimentation_node)
-    workflow.add_node("ml_modeler", ml_modeler_node)
+    # Senior Analyst Tier — dispatched in PARALLEL by senior_tier_dispatch_node
+    workflow.add_node("senior_tier_dispatch", senior_tier_dispatch_node)
+    # Synthesis & reporting
     workflow.add_node("strategic_advisor", strategic_advisor_node)
-    # Reporting Nodes
     workflow.add_node("report_writer", report_writer_node)
     workflow.add_node("narrative_stitcher", narrative_stitcher_node)
+    workflow.add_node("presentation_builder", presentation_builder_node)
     workflow.add_node("auditor", auditor_node)
     workflow.add_node("finalize", finalize_node)
 
-    # Entry point
-    workflow.set_entry_point("data_cleaner")
+    # ── Entry point ──────────────────────────────────────────────────────────
+    workflow.set_entry_point("data_quality_gate")
+    workflow.add_edge("data_quality_gate", "data_cleaner")
     workflow.add_edge("data_cleaner", "hypothesis_planner")
     workflow.add_edge("hypothesis_planner", "data_scientist")
 
-    # Sequence and Custom Loops
+    # ── Loop 1: Reflection Cycle ─────────────────────────────────────────────
     workflow.add_edge("data_scientist", "reflector")
-
-    # Custom Loop 1: Reflection Cycle
     workflow.add_conditional_edges(
         "reflector",
         route_reflection,
@@ -3098,16 +3650,16 @@ def build_analysis_graph() -> StateGraph:
         }
     )
 
+    # ── Visualization Stage ──────────────────────────────────────────────────
     workflow.add_edge("viz_preprocessor", "viz_coder")
 
-    # Custom Loop 2: Visualization Self-Repair Cycle
-    # After viz is done → Senior Analyst Tier begins
+    # ── Loop 2: Visualization Self-Repair Cycle ──────────────────────────────
     workflow.add_conditional_edges(
         "viz_coder",
         route_viz_coder,
         {
             "viz_repair": "viz_repair",
-            "report_writer": "causal_analyst",  # Route to senior tier
+            "report_writer": "senior_tier_dispatch",   # → parallel senior tier
             "end": END
         }
     )
@@ -3116,23 +3668,23 @@ def build_analysis_graph() -> StateGraph:
         route_viz_repair,
         {
             "viz_repair": "viz_repair",
-            "report_writer": "causal_analyst",  # Route to senior tier
+            "report_writer": "senior_tier_dispatch",   # → parallel senior tier
             "end": END
         }
     )
 
-    # Senior Analyst Tier Pipeline (sequential with Experimentation and ML Modeler)
-    workflow.add_edge("causal_analyst", "forecaster")
-    workflow.add_edge("forecaster", "anomaly_detector")
-    workflow.add_edge("anomaly_detector", "experimentation")
-    workflow.add_edge("experimentation", "ml_modeler")
-    workflow.add_edge("ml_modeler", "strategic_advisor")
+    # ── Senior Analyst Tier — PARALLEL dispatch node ─────────────────────────
+    # senior_tier_dispatch_node runs all 7 specialist agents simultaneously
+    # (Causal, Forecast, Anomaly, A/B, ML, Cohort, Benchmark) via ThreadPoolExecutor
+    workflow.add_edge("senior_tier_dispatch", "strategic_advisor")
+
+    # ── Synthesis & Reporting ────────────────────────────────────────────────
     workflow.add_edge("strategic_advisor", "report_writer")
-
     workflow.add_edge("report_writer", "narrative_stitcher")
-    workflow.add_edge("narrative_stitcher", "auditor")
+    workflow.add_edge("narrative_stitcher", "presentation_builder")
+    workflow.add_edge("presentation_builder", "auditor")
 
-    # Custom Loop 3: Auditor Quality & Regeneration Cycle
+    # ── Loop 3: Auditor Quality & Regeneration Cycle ─────────────────────────
     workflow.add_conditional_edges(
         "auditor",
         route_audit,
@@ -3236,6 +3788,13 @@ class AgentGraph:
                 "strategic_results": dict(self.state.strategic_results),
                 "time_column_detected": self.state.time_column_detected,
                 "target_columns_detected": list(self.state.target_columns_detected),
+                # NEW agent initial states
+                "data_quality_score": getattr(self.state, "data_quality_score", 0),
+                "data_quality_gate_decision": getattr(self.state, "data_quality_gate_decision", "PASS"),
+                "data_quality_issues": list(getattr(self.state, "data_quality_issues", [])),
+                "cohort_results": dict(getattr(self.state, "cohort_results", {})),
+                "benchmark_results": dict(getattr(self.state, "benchmark_results", {})),
+                "presentation_results": dict(getattr(self.state, "presentation_results", {})),
             }
 
             job_lbl = self.state.job_id or 'anonymous'
@@ -3274,6 +3833,13 @@ class AgentGraph:
             self.state.strategic_results = final_state.get("strategic_results", self.state.strategic_results)
             self.state.time_column_detected = final_state.get("time_column_detected", self.state.time_column_detected)
             self.state.target_columns_detected = final_state.get("target_columns_detected", self.state.target_columns_detected)
+            # NEW agent sync-back
+            self.state.data_quality_score = final_state.get("data_quality_score", getattr(self.state, "data_quality_score", 0))
+            self.state.data_quality_gate_decision = final_state.get("data_quality_gate_decision", getattr(self.state, "data_quality_gate_decision", "PASS"))
+            self.state.data_quality_issues = final_state.get("data_quality_issues", getattr(self.state, "data_quality_issues", []))
+            self.state.cohort_results = final_state.get("cohort_results", getattr(self.state, "cohort_results", {}))
+            self.state.benchmark_results = final_state.get("benchmark_results", getattr(self.state, "benchmark_results", {}))
+            self.state.presentation_results = final_state.get("presentation_results", getattr(self.state, "presentation_results", {}))
 
             if final_state.get("error"):
                 self.state.error = final_state["error"]

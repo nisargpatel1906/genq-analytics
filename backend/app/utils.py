@@ -151,19 +151,22 @@ def try_repair_json(content: str) -> str:
 def _raw_decode_root_object(text: str) -> dict | None:
     """
     Uses json.JSONDecoder(strict=False).raw_decode to parse the ROOT JSON object
-    starting at the first '{' in `text`, ignoring any trailing content.
-    Returns None if the root object cannot be parsed.
+    starting at any '{' in `text`, ignoring any preamble or trailing content.
+    Returns None if no root object can be parsed.
     """
     decoder = json.JSONDecoder(strict=False)
-    idx = text.find("{")
-    if idx == -1:
-        return None
-    try:
-        obj, _ = decoder.raw_decode(text, idx)
-        if isinstance(obj, dict):
-            return obj
-    except json.JSONDecodeError:
-        pass
+    idx = 0
+    while True:
+        idx = text.find("{", idx)
+        if idx == -1:
+            break
+        try:
+            obj, _ = decoder.raw_decode(text, idx)
+            if isinstance(obj, dict) and obj:
+                return obj
+        except json.JSONDecodeError:
+            pass
+        idx += 1
     return None
 
 
@@ -171,7 +174,8 @@ def parse_json_safely(content: str) -> dict:
     """Extracts and parses JSON from LLM response.
 
     Handles:
-    - <think>...</think> reasoning blocks (DeepSeek-R1, Gemma)
+    - <think>...</think> reasoning blocks (DeepSeek-R1, Gemma, Qwen)
+    - Preamble/conversational text before or after the JSON payload
     - Markdown code fences (```json ... ``` or unclosed fences)
     - Trailing text / extra JSON blocks after the root object
     - Truncated / unbalanced JSON (smart auto-repair of root object)
@@ -191,61 +195,80 @@ def parse_json_safely(content: str) -> dict:
         logger.error("LLM response was empty after stripping think-tags.")
         return {"error": "Empty response", "raw": original_content}
 
-    # ── 2. Strip markdown code fences ─────────────────────────────────────────
-    fence_match = re.search(r'```(?:json)?\s*([\s\S]*?)```', content)
-    if fence_match:
-        content = fence_match.group(1).strip()
-    else:
-        # Strip open fence if unclosed
-        fence_open = re.search(r'```(?:json)?\s*', content)
-        if fence_open:
-            content = content[fence_open.end():].strip()
-        if content.endswith("```"):
-            content = content[:-3].strip()
+    # ── 2. First fast scan directly with raw_decode on raw content ─────────────
+    # Often the LLM puts valid JSON directly, or preceded by thinking prose
+    fast_obj = _raw_decode_root_object(content)
+    if fast_obj is not None:
+        return fast_obj
 
-    # ── 3. Strip LaTeX and inline // comments ─────────────────────────────────
-    content = re.sub(r'\$\\text\{([a-zA-Z]+)\}\s*=\s*([0-9\.]+)\$', r'\1 = \2', content)
-    content = content.replace('$', '')
-    content = re.sub(r'//[^\n]*', '', content)
+    # ── 3. Strip markdown code fences ─────────────────────────────────────────
+    # Try all fenced code blocks in order
+    for match in re.finditer(r'```(?:json)?\s*([\s\S]*?)```', content):
+        fenced = match.group(1).strip()
+        fenced_obj = _raw_decode_root_object(fenced)
+        if fenced_obj is not None:
+            return fenced_obj
 
-    first_brace = content.find("{")
-    if first_brace == -1:
-        logger.error("No JSON object found in LLM response.")
-        return {"error": "No JSON object found", "raw": original_content}
+    # Also handle unclosed fence
+    fence_open = re.search(r'```(?:json)?\s*', content)
+    if fence_open:
+        unclosed = content[fence_open.end():].strip()
+        if unclosed.endswith("```"):
+            unclosed = unclosed[:-3].strip()
+        unclosed_obj = _raw_decode_root_object(unclosed)
+        if unclosed_obj is not None:
+            return unclosed_obj
 
-    root_text = content[first_brace:].strip()
+    # ── 4. Strip LaTeX and inline // comments ─────────────────────────────────
+    clean_text = re.sub(r'\$\\text\{([a-zA-Z]+)\}\s*=\s*([0-9\.]+)\$', r'\1 = \2', content)
+    clean_text = clean_text.replace('$', '')
+    clean_text = re.sub(r'//[^\n]*', '', clean_text)
 
-    # ── 4. Fast path: raw_decode on root object ──────────────────────────────
-    result = _raw_decode_root_object(root_text)
-    if result is not None:
-        return result
+    clean_obj = _raw_decode_root_object(clean_text)
+    if clean_obj is not None:
+        return clean_obj
 
-    # ── 5. Balanced slice path ───────────────────────────────────────────────
-    last_brace = root_text.rfind("}")
-    if last_brace != -1 and are_braces_balanced(root_text[:last_brace + 1]):
+    # ── 5. Balanced slice path on each candidate '{' ──────────────────────────
+    # Scan from every '{' to see if balanced slice parses
+    idx = 0
+    while True:
+        idx = clean_text.find("{", idx)
+        if idx == -1:
+            break
+        candidate = clean_text[idx:].strip()
+        last_brace = candidate.rfind("}")
+        if last_brace != -1 and are_braces_balanced(candidate[:last_brace + 1]):
+            try:
+                res = json.loads(candidate[:last_brace + 1], strict=False)
+                if isinstance(res, dict) and res:
+                    return res
+            except json.JSONDecodeError:
+                pass
+        idx += 1
+
+    # ── 6. Repair path: auto-repair truncated root object ─────────────────────
+    idx = 0
+    while True:
+        idx = clean_text.find("{", idx)
+        if idx == -1:
+            break
+        candidate = clean_text[idx:].strip()
+        repaired = try_repair_json(candidate)
         try:
-            result = json.loads(root_text[:last_brace + 1], strict=False)
-            if isinstance(result, dict):
-                return result
+            res = json.loads(repaired, strict=False)
+            if isinstance(res, dict) and res:
+                return res
         except json.JSONDecodeError:
             pass
 
-    # ── 6. Repair path: auto-repair truncated root object ─────────────────────
-    repaired = try_repair_json(root_text)
-    try:
-        result = json.loads(repaired, strict=False)
-        if isinstance(result, dict):
-            return result
-    except json.JSONDecodeError:
-        pass
-
-    result = _raw_decode_root_object(repaired)
-    if result is not None:
-        return result
+        rep_obj = _raw_decode_root_object(repaired)
+        if rep_obj is not None:
+            return rep_obj
+        idx += 1
 
     # Final fallback: standard loads
     try:
-        return json.loads(repaired)
+        return json.loads(clean_text)
     except json.JSONDecodeError as e:
         logger.warning(f"Failed to parse and repair JSON output: {e}. Raw sample: {original_content[:300]}")
         return {"error": "Failed to parse JSON", "raw": original_content}

@@ -115,10 +115,24 @@ def _model_for(task: str = "chat", provider_override: str | None = None) -> str:
     task_key = task.upper()
     return (
         os.environ.get(f"OPENROUTER_{task_key}_MODEL")
-        or os.environ.get(f"LLM_{task_key}_MODEL")
         or os.environ.get("OPENROUTER_MODEL")
+        or os.environ.get(f"LLM_{task_key}_MODEL")
         or OPENROUTER_DEFAULT_MODEL
     )
+
+
+def _openrouter_models_to_try(task: str = "chat") -> list[str]:
+    candidates = []
+    primary = _model_for(task, provider_override="openrouter")
+    if primary:
+        candidates.append(primary)
+    raw_fallbacks = os.environ.get("OPENROUTER_FALLBACK_MODELS", "").strip()
+    if raw_fallbacks:
+        for m in raw_fallbacks.split(","):
+            m = m.strip()
+            if m and m not in candidates:
+                candidates.append(m)
+    return candidates
 
 
 def provider_label(task: str = "chat") -> str:
@@ -483,12 +497,21 @@ async def chat_completion_stream(
         # Fallback to OpenRouter stream if configured
         fallback_provider = os.environ.get("LLM_FALLBACK_PROVIDER", "").strip().lower()
         if fallback_provider == "openrouter":
-            fb_model = _model_for(task, provider_override="openrouter")
-            async for chunk in _call_openrouter_stream_async(messages, fb_model, timeout=timeout):
-                yield chunk
+            for or_model in _openrouter_models_to_try(task):
+                try:
+                    async for chunk in _call_openrouter_stream_async(messages, or_model, timeout=timeout):
+                        yield chunk
+                    return
+                except Exception as stream_err:
+                    logger.warning("[OpenRouter] Streaming error with model '%s': %s", or_model, stream_err)
     else:
-        async for chunk in _call_openrouter_stream_async(messages, model, timeout=timeout):
-            yield chunk
+        for or_model in _openrouter_models_to_try(task):
+            try:
+                async for chunk in _call_openrouter_stream_async(messages, or_model, timeout=timeout):
+                    yield chunk
+                return
+            except Exception as stream_err:
+                logger.warning("[OpenRouter] Streaming error with model '%s': %s", or_model, stream_err)
 
 
 async def chat_completion_async(
@@ -548,12 +571,22 @@ async def chat_completion_async(
                 f"[{time.strftime('%H:%M:%S')}] [NVIDIA NIM] ⚠️ All configured NVIDIA NIM models exhausted ({candidates}). Falling back to OpenRouter...",
                 flush=True,
             )
-            fb_model = _model_for(task, provider_override="openrouter")
-            return await _retry_with_backoff_async(
-                lambda: _call_openrouter_async(messages, fb_model, task=task, json_mode=json_mode, timeout=timeout),
-                max_retries=5,
-                base_delay=6.0,
-            )
+            or_candidates = _openrouter_models_to_try(task)
+            last_or_err = None
+            for or_model in or_candidates:
+                try:
+                    return await _retry_with_backoff_async(
+                        lambda: _call_openrouter_async(messages, or_model, task=task, json_mode=json_mode, timeout=timeout),
+                        max_retries=2,
+                        base_delay=2.0,
+                    )
+                except Exception as or_err:
+                    last_or_err = or_err
+                    logger.warning("[OpenRouter] Model '%s' failed: %s", or_model, or_err)
+                    print(f"[{time.strftime('%H:%M:%S')}] [OpenRouter] ⚠️ Model '{or_model}' failed, attempting fallback...", flush=True)
+                    continue
+            if last_or_err:
+                raise last_or_err
 
         # If fallback exhausted and no alternate provider, raise informative error
         if last_error:
@@ -563,11 +596,22 @@ async def chat_completion_async(
                 ) from last_error
             raise last_error
 
-    return await _retry_with_backoff_async(
-        lambda: _call_openrouter_async(messages, model, task=task, json_mode=json_mode, timeout=timeout),
-        max_retries=5,
-        base_delay=6.0,
-    )
+    or_candidates = _openrouter_models_to_try(task)
+    last_or_err = None
+    for or_model in or_candidates:
+        try:
+            return await _retry_with_backoff_async(
+                lambda: _call_openrouter_async(messages, or_model, task=task, json_mode=json_mode, timeout=timeout),
+                max_retries=2,
+                base_delay=2.0,
+            )
+        except Exception as or_err:
+            last_or_err = or_err
+            logger.warning("[OpenRouter] Model '%s' failed: %s", or_model, or_err)
+            print(f"[{time.strftime('%H:%M:%S')}] [OpenRouter] ⚠️ Model '{or_model}' failed, attempting fallback...", flush=True)
+            continue
+    if last_or_err:
+        raise last_or_err
 
 
 def chat_completion(

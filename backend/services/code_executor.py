@@ -16,7 +16,7 @@ logger = logging.getLogger("genq_api.code_executor")
 
 # Modules that the LLM code is allowed to import
 WHITELISTED_MODULES = {
-    "pandas", "numpy", "matplotlib", "seaborn", "scipy", "sklearn", "json", "math",
+    "pandas", "numpy", "matplotlib", "seaborn", "scipy", "sklearn", "statsmodels", "json", "math",
     "collections", "itertools", "os", "re", "datetime",
     "base64", "string", "io", "pickle", "warnings", "typing"
 }
@@ -212,6 +212,9 @@ def execute_analysis_code(
     try:
         with open(df_path, "wb") as f:
             pickle.dump(df, f)
+        # Also provide standard CSV copies so LLM code calling pd.read_csv('data.csv') or 'dataset.csv' works seamlessly
+        df.to_csv(os.path.join(sandbox_dir, "data.csv"), index=False)
+        df.to_csv(os.path.join(sandbox_dir, "dataset.csv"), index=False)
     except Exception as e:
         shutil.rmtree(sandbox_dir)
         return ExecutionResult(

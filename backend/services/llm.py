@@ -16,7 +16,7 @@ else:
     load_dotenv(override=True)
 
 # Exclusive OpenRouter Configuration
-OPENROUTER_DEFAULT_MODEL = "inclusionai/ling-3.0-flash-fin:free"
+OPENROUTER_DEFAULT_MODEL = "qwen/qwen3.8-27b:free"
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 
 # Active API key rotation index

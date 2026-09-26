@@ -9,8 +9,12 @@ export default {
       colors: {
         bg: 'var(--color-bg)',
         fg: 'var(--color-fg)',
-        surface: 'var(--color-surface)',
+        surface: {
+          DEFAULT: 'var(--color-surface)',
+          secondary: 'var(--color-surface-secondary)',
+        },
         border: 'var(--color-border)',
+        muted: 'var(--color-muted)',
         accent: {
           DEFAULT: 'var(--color-accent)',
           hover: 'var(--color-accent-hover)',
@@ -24,6 +28,7 @@ export default {
       fontFamily: {
         heading: 'var(--font-heading)',
         body: 'var(--font-body)',
+        mono: 'var(--font-mono)',
       },
     },
   },

@@ -8,7 +8,6 @@ import {
   RefreshCw,
   ShieldCheck,
   BarChart2,
-  Sparkles,
   Database,
   Search,
   LineChart,
@@ -23,6 +22,7 @@ import {
   ChevronUp,
   XCircle,
 } from 'lucide-react';
+import { Logo } from './ui/Logo';
 import { Badge } from './ui/Badge';
 import { Button } from './ui/Button';
 import {
@@ -135,7 +135,7 @@ const DEFAULT_PIPELINE_STAGES: PipelineStageDef[] = [
 
 const STAGE_ICONS: Record<string, React.ReactNode> = {
   profile: <Database className="w-4 h-4" />,
-  data_cleaner: <Sparkles className="w-4 h-4" />,
+  data_cleaner: <Logo size={16} className="w-4 h-4" />,
   hypothesis_planner: <Search className="w-4 h-4" />,
   data_scientist: <BarChart2 className="w-4 h-4" />,
   reflector: <RefreshCw className="w-4 h-4" />,
@@ -316,9 +316,9 @@ export const AgentPipelineTracker: React.FC<AgentPipelineTrackerProps> = ({
   }, [agentProgress]);
 
   return (
-    <div className={`w-full bg-surface border border-border rounded-[16px] overflow-hidden shadow-sm ${className}`}>
+    <div className={`w-full bg-surface border border-border rounded-[12px] overflow-hidden shadow-custom-md ${className}`}>
       {/* ── Active Banner & Header ────────────────────────────────────── */}
-      <div className="p-5 border-b border-border bg-gradient-to-b from-bg/40 to-surface">
+      <div className="p-5 border-b border-border bg-gradient-to-b from-surface-secondary/40 to-surface">
         <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
           <div className="flex items-center gap-3">
             <div className="w-8 h-8 rounded-full bg-accent/10 border border-accent/20 flex items-center justify-center text-accent">
@@ -510,28 +510,28 @@ export const AgentPipelineTracker: React.FC<AgentPipelineTrackerProps> = ({
             initial={{ height: 0, opacity: 0 }}
             animate={{ height: 'auto', opacity: 1 }}
             exit={{ height: 0, opacity: 0 }}
-            className="border-t border-border bg-[#111827] text-white p-4 font-mono text-[11px] overflow-hidden"
+            className="border-t border-border bg-[#1A1208] text-[#EDE4D0] p-4 font-mono text-[11px] overflow-hidden"
           >
-            <div className="flex items-center justify-between mb-2 pb-2 border-b border-white/10">
-              <span className="flex items-center gap-2 text-white/70">
+            <div className="flex items-center justify-between mb-2 pb-2 border-b border-border/20">
+              <span className="flex items-center gap-2 text-[#EDE4D0]/80">
                 <Terminal className="w-3.5 h-3.5 text-accent" />
-                Live Agent Execution Activity Feed
+                Live Autonomous Multi-Agent Execution Feed
               </span>
-              <span className="text-[10px] text-white/40">{agentProgress.length} events logged</span>
+              <span className="text-[10px] text-muted">{agentProgress.length} events logged</span>
             </div>
             <div className="max-h-48 overflow-y-auto space-y-1.5 pr-1">
               {agentProgress.length === 0 ? (
-                <div className="text-white/40 italic">Waiting for initial agent dispatch event...</div>
+                <div className="text-muted italic">Waiting for initial agent dispatch event...</div>
               ) : (
                 agentProgress.map((ap, idx) => (
                   <div key={idx} className="flex items-start gap-2 leading-tight">
-                    <span className="text-white/40 text-[10px] flex-shrink-0">
+                    <span className="text-muted text-[10px] flex-shrink-0">
                       [{idx + 1}]
                     </span>
-                    <span className={ap.status === 'completed' ? 'text-emerald-400 font-semibold' : 'text-sky-300'}>
+                    <span className={ap.status === 'completed' ? 'text-success font-semibold' : 'text-accent'}>
                       [{ap.name}]:
                     </span>
-                    <span className="text-white/80">{ap.detail}</span>
+                    <span className="text-[#EDE4D0]/90">{ap.detail}</span>
                   </div>
                 ))
               )}

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { Sparkles, Send, MessageSquare, X, Loader2, Bot, User, FileText, AlertTriangle, Target, ShieldCheck, CheckCircle2, RefreshCw, Zap, Brain, GitBranch, Download } from 'lucide-react';
+import { Send, MessageSquare, X, Loader2, Bot, User, FileText, AlertTriangle, Target, ShieldCheck, CheckCircle2, RefreshCw, Zap, Brain, GitBranch, Download } from 'lucide-react';
+import { Logo } from '../components/ui/Logo';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Button } from '../components/ui/Button';
@@ -139,7 +140,7 @@ function ChatPanel({ reportId, onClose }: { reportId: string; onClose: () => voi
       <div className="flex items-center justify-between p-4 border-b border-border flex-shrink-0">
         <div className="flex items-center gap-2">
           <div className="w-7 h-7 rounded-full bg-accent flex items-center justify-center">
-            <Sparkles className="w-3.5 h-3.5 text-white" />
+            <Logo size={14} className="text-white" />
           </div>
           <div>
             <p className="font-body font-semibold text-[13px] text-fg">Copilot Analytics Suite</p>
@@ -204,20 +205,27 @@ function ChatPanel({ reportId, onClose }: { reportId: string; onClose: () => voi
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
         {messages.map((m, i) => (
           <div key={i} className={`flex gap-2.5 ${m.role === 'user' ? 'flex-row-reverse' : 'flex-row'}`}>
-            <div className={`w-7 h-7 rounded-full flex-shrink-0 flex items-center justify-center ${
-              m.role === 'user' ? 'bg-fg text-bg' : 'bg-accent/15 text-accent'
+            <div className={`w-7 h-7 rounded-[6px] flex-shrink-0 flex items-center justify-center ${
+              m.role === 'user' ? 'bg-[#1A1208] text-[#FDFAF5]' : 'bg-surface-secondary text-accent border border-border'
             }`}>
               {m.role === 'user' ? <User className="w-3.5 h-3.5" /> : <Bot className="w-3.5 h-3.5" />}
             </div>
-            <div className={`max-w-[85%] rounded-xl px-3.5 py-2.5 ${
+            <div className={`max-w-[85%] rounded-[8px] px-3.5 py-2.5 ${
               m.role === 'user'
-                ? 'bg-fg text-bg font-body text-[13px]'
-                : 'bg-bg border border-border text-fg font-body text-[13px] leading-relaxed shadow-sm'
+                ? 'bg-[#1A1208] text-[#FDFAF5] font-body text-[13px]'
+                : 'bg-surface border border-border text-fg font-body text-[13px] leading-relaxed shadow-custom-sm'
             }`}>
+              {m.role === 'assistant' && (
+                <div className="mb-1.5 flex items-center gap-1.5">
+                  <span className="font-mono text-[9px] uppercase tracking-wider font-bold text-accent bg-surface-secondary px-1.5 py-0.5 rounded-[4px] border border-border">
+                    GENQ AI
+                  </span>
+                </div>
+              )}
               {m.role === 'user' ? (
                 m.content
               ) : (
-                <div className="prose prose-sm max-w-none text-fg prose-p:my-1.5 prose-headings:font-heading prose-table:border prose-table:border-border prose-th:bg-surface prose-th:p-1.5 prose-td:p-1.5 prose-img:rounded-lg prose-img:border prose-img:border-border prose-img:my-2">
+                <div className="prose prose-sm max-w-none text-fg prose-p:my-1.5 prose-headings:font-heading prose-table:border prose-table:border-border prose-th:bg-surface-secondary prose-th:p-1.5 prose-td:p-1.5 prose-img:rounded-[8px] prose-img:border prose-img:border-border prose-img:my-2">
                   <ReactMarkdown
                     remarkPlugins={[remarkGfm]}
                     components={{
@@ -259,7 +267,7 @@ function ChatPanel({ reportId, onClose }: { reportId: string; onClose: () => voi
             <button
               key={s}
               onClick={() => send(s)}
-              className="text-[11px] font-body text-accent border border-accent/30 bg-accent/5 hover:bg-accent/15 rounded-full px-3 py-1 transition-colors text-left"
+              className="text-[11px] font-body text-accent border border-border bg-surface hover:bg-surface-secondary rounded-[6px] px-2.5 py-1 transition-colors text-left shadow-custom-sm"
             >
               {s}
             </button>
@@ -268,11 +276,11 @@ function ChatPanel({ reportId, onClose }: { reportId: string; onClose: () => voi
       )}
 
       {/* Input */}
-      <div className="p-3 border-t border-border flex-shrink-0">
-        <div className="flex items-end gap-2 bg-bg border border-border rounded-xl overflow-hidden focus-within:border-accent transition-colors">
+      <div className="p-3 border-t border-border flex-shrink-0 bg-surface">
+        <div className="flex items-end gap-2 bg-surface border border-border rounded-[8px] overflow-hidden focus-within:border-accent transition-colors shadow-custom-sm">
           <textarea
-            className="flex-1 font-body text-[13px] text-fg bg-transparent outline-none resize-none px-3 py-2.5 max-h-[120px]"
-            placeholder="Ask about the data, or request changes…"
+            className="flex-1 font-body text-[13px] text-fg bg-transparent outline-none resize-none px-3.5 py-2.5 max-h-[120px]"
+            placeholder="Inquire regarding dataset dynamics, or request deeper analysis…"
             rows={1}
             value={input}
             onChange={e => setInput(e.target.value)}
@@ -281,7 +289,7 @@ function ChatPanel({ reportId, onClose }: { reportId: string; onClose: () => voi
           <button
             onClick={() => send(input)}
             disabled={thinking || !input.trim()}
-            className="m-1.5 w-8 h-8 rounded-lg bg-accent flex items-center justify-center text-white hover:opacity-90 transition-opacity disabled:opacity-30"
+            className="m-1.5 w-8 h-8 rounded-[6px] bg-accent flex items-center justify-center text-[#FDFAF5] hover:bg-accent-hover transition-colors disabled:opacity-30"
           >
             <Send className="w-3.5 h-3.5" />
           </button>
@@ -363,14 +371,14 @@ export function Dashboard() {
             {reportId && (
               <button
                 onClick={() => setChatOpen(o => !o)}
-                className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-body text-[13px] font-medium border transition-all ${
+                className={`flex items-center gap-2 px-4 py-2 rounded-[8px] font-body text-[13px] font-semibold border transition-all shadow-custom-sm ${
                   chatOpen
-                    ? 'bg-accent text-white border-accent shadow-sm'
-                    : 'bg-surface border-border text-fg hover:border-accent'
+                    ? 'bg-accent text-[#FDFAF5] border-accent shadow-sm'
+                    : 'bg-surface border-border text-fg hover:border-accent hover:bg-surface-secondary/40'
                 }`}
               >
                 <MessageSquare className="w-4 h-4" />
-                {chatOpen ? 'Close Chat' : 'Ask AI'}
+                {chatOpen ? 'Close Consultant' : 'Consult Analyst'}
               </button>
             )}
           </div>
@@ -465,7 +473,7 @@ export function Dashboard() {
                 ))
               ) : (
                 <div className="flex items-center gap-3 py-12 text-fg/40 bg-surface border border-border rounded-xl px-6">
-                  <Sparkles className="w-6 h-6" />
+                  <Logo size={24} className="text-accent/60" />
                   <span className="font-body text-[13px]">No charts could be generated for this dataset.</span>
                 </div>
               )}
@@ -485,7 +493,7 @@ export function Dashboard() {
               {((reportData?.report?.keyFindings?.length) ?? 0) > 0 && (
                 <div className="bg-surface border border-border rounded-xl p-6 shadow-sm">
                   <div className="flex items-center gap-2 mb-4">
-                    <Sparkles className="w-4 h-4 text-accent" />
+                    <Logo size={16} className="text-accent" />
                     <span className="font-body text-[10px] text-accent uppercase tracking-widest font-semibold">Key Findings</span>
                   </div>
                   <div className="space-y-4">
@@ -516,32 +524,32 @@ export function Dashboard() {
 
               {/* Anomalies */}
               {((reportData?.report?.anomalies?.length) ?? 0) > 0 && (
-                <div className="bg-surface border border-border rounded-xl p-6 shadow-sm">
+                <div className="bg-surface border border-border rounded-[12px] p-6 shadow-custom-sm">
                   <div className="flex items-center gap-2 mb-4">
-                    <AlertTriangle className="w-4 h-4 text-amber-500" />
-                    <span className="font-body text-[10px] text-amber-600 uppercase tracking-widest font-semibold">Anomalies Detected</span>
+                    <AlertTriangle className="w-4 h-4 text-warning" />
+                    <span className="font-body text-[10px] text-warning uppercase tracking-widest font-semibold">Anomalies Detected</span>
                   </div>
                   <div className="overflow-x-auto">
                     <table className="w-full font-body text-[13px]">
                       <thead>
-                        <tr className="border-b border-border text-fg/50 text-[11px] uppercase tracking-wider">
-                          <th className="text-left pb-2 font-medium">Column</th>
-                          <th className="text-left pb-2 font-medium">Severity</th>
-                          <th className="text-left pb-2 font-medium">Description</th>
+                        <tr className="border-b border-border text-muted text-[11px] uppercase tracking-wider font-heading">
+                          <th className="text-left pb-2 font-semibold">Column</th>
+                          <th className="text-left pb-2 font-semibold">Severity</th>
+                          <th className="text-left pb-2 font-semibold">Description</th>
                         </tr>
                       </thead>
                       <tbody>
                         {(reportData?.report?.anomalies || []).map((a: any, i: number) => (
                           <tr key={i} className="border-b border-border/40 last:border-0">
-                            <td className="py-3 pr-4 font-medium text-fg">{a.column}</td>
+                            <td className="py-3 pr-4 font-mono font-medium text-fg">{a.column}</td>
                             <td className="py-3 pr-4">
-                              <span className={`px-2 py-0.5 rounded text-[10px] uppercase font-bold ${
-                                a.severity?.toLowerCase() === 'high' ? 'bg-red-100 text-red-700' :
-                                a.severity?.toLowerCase() === 'medium' ? 'bg-amber-100 text-amber-700' :
-                                'bg-green-100 text-green-700'
+                              <span className={`px-2 py-0.5 rounded-[4px] border text-[10px] uppercase font-bold tracking-wider ${
+                                a.severity?.toLowerCase() === 'high' ? 'bg-[#8B3A3A]/15 text-[#8B3A3A] border-[#8B3A3A]/30' :
+                                a.severity?.toLowerCase() === 'medium' ? 'bg-[#B8860B]/15 text-[#B8860B] border-[#B8860B]/30' :
+                                'bg-[#5C6E3E]/15 text-[#5C6E3E] border-[#5C6E3E]/30'
                               }`}>{a.severity}</span>
                             </td>
-                            <td className="py-3 text-fg/70 leading-relaxed">{a.description}</td>
+                            <td className="py-3 text-muted leading-relaxed">{a.description}</td>
                           </tr>
                         ))}
                       </tbody>
@@ -552,7 +560,7 @@ export function Dashboard() {
 
               {/* Recommendations */}
               {((reportData?.report?.recommendations?.length) ?? 0) > 0 && (
-                <div className="bg-surface border border-border rounded-xl p-6 shadow-sm">
+                <div className="bg-surface border border-border rounded-[12px] p-6 shadow-custom-sm">
                   <div className="flex items-center gap-2 mb-4">
                     <Target className="w-4 h-4 text-accent" />
                     <span className="font-body text-[10px] text-accent uppercase tracking-widest font-semibold">Strategic Recommendations</span>
@@ -584,7 +592,7 @@ export function Dashboard() {
             // Empty state
             <div className="flex flex-col items-center justify-center py-28 gap-5 text-center">
               <div className="w-16 h-16 rounded-2xl bg-accent/10 flex items-center justify-center">
-                <Sparkles className="w-8 h-8 text-accent/60" />
+                <Logo size={32} className="text-accent" />
               </div>
               <h2 className="font-heading text-[26px] text-fg/50">No dataset selected</h2>
               <p className="font-body text-[14px] text-fg/40 max-w-sm">
@@ -624,7 +632,7 @@ export function Dashboard() {
       {reportId && (
         <div className="flex-shrink-0 w-full bg-surface border-t border-border px-6 py-3 flex justify-between items-center z-30">
           <div className="flex items-center gap-2 font-body text-[12px] text-fg/50">
-            <Sparkles className="w-3.5 h-3.5" />
+            <Logo size={14} className="text-accent" />
             <span>Click "Ask AI" to chat about this report and refine it with prompts</span>
           </div>
           <div className="flex items-center gap-3">

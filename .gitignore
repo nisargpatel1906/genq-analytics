@@ -48,11 +48,10 @@ backend/reports_store.json
 *.jpg
 *.jpeg
 *.svg
-!frontend/src/assets/*.svg
-!frontend/src/assets/*.png
-!frontend/public/*.svg
-!frontend/public/*.ico
-!frontend/public/*.png
+!frontend/src/assets/**
+!frontend/public/**
+!frontend/public/logo/**
+!frontend/src/assets/logo/**
 backend/*.png
 backend/*.pdf
 backend/*.docx
@@ -134,7 +133,9 @@ Thumbs.db
 *~
 .antigravityrules
 .docs
-.docx
+!.docx/
+!.docx/**
 graphify-out/
 test_datasets/
 test_results/
+reports_output/

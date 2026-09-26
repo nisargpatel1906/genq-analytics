@@ -124,11 +124,11 @@ export function Upload() {
         {/* Header (only show when idle or error) */}
         {(status === 'idle' || status === 'error') && (
           <div className="text-center mb-10">
-            <h1 className="font-heading text-[40px] font-bold text-fg leading-tight mb-3">
-              Initialize Analysis
+            <h1 className="font-heading text-[38px] md:text-[42px] font-bold text-fg leading-tight mb-3">
+              Deposit Dataset for Synthesis
             </h1>
-            <p className="font-body text-[14px] text-fg/60 leading-relaxed">
-              Upload your structured dataset to begin the automated insight extraction process. Supported formats: CSV, TSV, XLSX…
+            <p className="font-body text-[15px] text-muted max-w-[560px] mx-auto leading-relaxed">
+              Deposit your structured tabular dataset to initiate multi-agent autonomous inquiry, empirical hypothesis verification, and executive briefing.
             </p>
           </div>
         )}
@@ -139,8 +139,8 @@ export function Upload() {
             onDragOver={handleDragOver}
             onDragLeave={handleDragLeave}
             onDrop={handleDrop}
-            className={`relative border-2 border-dashed rounded-[16px] p-12 text-center transition-all ${
-              isDragging ? 'border-accent bg-surface/50' : 'border-border bg-surface'
+            className={`relative border-2 border-dashed rounded-[12px] p-12 text-center transition-all shadow-custom-sm ${
+              isDragging ? 'border-accent bg-surface-secondary/60' : 'border-border bg-surface hover:border-accent/60'
             }`}
           >
             <input
@@ -152,22 +152,25 @@ export function Upload() {
             />
             
             <div className="flex flex-col items-center pointer-events-none">
-              <FileText className={`w-10 h-10 mb-4 stroke-1 ${status === 'error' ? 'text-error/80' : 'text-accent/60'}`} />
-              <h2 className="font-heading text-[22px] text-fg mb-2">
-                {status === 'error' ? 'Analysis Failed' : 'Drop your CSV or Excel'}
+              <div className="w-14 h-14 rounded-[10px] bg-surface-secondary border border-border flex items-center justify-center mb-4">
+                <FileText className={`w-7 h-7 stroke-[1.5] ${status === 'error' ? 'text-error' : 'text-accent'}`} />
+              </div>
+              <h2 className="font-heading text-[22px] text-fg font-semibold mb-2">
+                {status === 'error' ? 'Synthesis Interrupted' : 'Deposit Dataset'}
               </h2>
-              <p className={`font-body text-[13px] mb-6 ${status === 'error' ? 'text-error/80 max-w-[350px]' : 'text-fg/60'}`}>
-                {status === 'error' ? errorMessage : 'or click to browse from your local directory'}
+              <p className={`font-body text-[13px] mb-6 ${status === 'error' ? 'text-error max-w-[380px]' : 'text-muted'}`}>
+                {status === 'error' ? errorMessage : 'Drag and drop your CSV or Excel file here, or browse local repository'}
               </p>
               <Button 
                 className="pointer-events-auto" 
                 disabled={status !== 'idle' && status !== 'error'}
-                variant={status === 'error' ? 'secondary' : 'primary'}
+                variant={status === 'error' ? 'danger' : 'primary'}
+                size="md"
               >
-                {status === 'error' ? 'Try Again' : 'Select File'}
+                {status === 'error' ? 'Retry Ingestion' : 'Browse Local Files'}
               </Button>
-              <p className="font-body text-[11px] text-fg/40 mt-4">
-                Maximum file size: 500MB
+              <p className="font-mono text-[11px] text-muted mt-5">
+                Supported formats: CSV, XLSX · Maximum file volume: 500MB
               </p>
             </div>
           </div>
@@ -203,10 +206,10 @@ export function Upload() {
                   onCancel={cancelAnalysis}
                 />
               ) : (
-                <div className="p-6 bg-surface border border-border rounded-[16px] flex items-center justify-center gap-3">
+                <div className="p-6 bg-surface border border-border rounded-[12px] shadow-custom-sm flex items-center justify-center gap-3">
                   <div className="w-5 h-5 border-2 border-accent border-t-transparent rounded-full animate-spin" />
                   <span className="font-body text-[14px] text-fg font-medium">
-                    Pre-scanning dataset schema and generating discovery profile...
+                    Pre-scanning dataset schema and formulating discovery profile...
                   </span>
                 </div>
               )}

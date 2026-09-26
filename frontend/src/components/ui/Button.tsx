@@ -17,17 +17,17 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
       <button
         ref={ref}
         className={cn(
-          "inline-flex items-center justify-center rounded-[8px] font-body font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-accent focus:ring-offset-2 focus:ring-offset-bg disabled:opacity-50 disabled:pointer-events-none tracking-[0.04em]",
+          "inline-flex items-center justify-center font-body font-semibold transition-all duration-150 focus:outline-none focus:ring-2 focus:ring-accent focus:ring-offset-2 focus:ring-offset-bg disabled:opacity-50 disabled:pointer-events-none tracking-[0.02em]",
           {
-            'bg-accent text-[#F5F0E8] hover:bg-accent-hover': variant === 'primary',
-            'bg-transparent border border-accent text-accent hover:bg-surface': variant === 'secondary',
-            'bg-[#1A1208] text-[#F5F0E8] hover:bg-[#3D2E1A]': variant === 'inverted',
-            'bg-transparent border border-border text-fg hover:bg-surface': variant === 'outlined',
-            'bg-error text-[#F5F0E8] hover:bg-[#7a3232]': variant === 'danger',
-            'bg-transparent text-fg hover:bg-surface': variant === 'ghost',
-            'px-[16px] py-[8px] text-[13px]': size === 'sm',
-            'px-[20px] py-[10px] text-[13px]': size === 'md',
-            'px-[28px] py-[14px] text-[14px]': size === 'lg',
+            'bg-accent text-[#FDFAF5] hover:bg-accent-hover shadow-custom-sm active:translate-y-[1px]': variant === 'primary',
+            'bg-surface-secondary text-accent hover:bg-[#D4C9B0] active:translate-y-[1px]': variant === 'secondary',
+            'bg-[#1A1208] text-[#FDFAF5] hover:bg-[#2C2010] active:translate-y-[1px]': variant === 'inverted',
+            'bg-transparent border border-accent text-accent hover:bg-surface-secondary active:translate-y-[1px]': variant === 'outlined',
+            'bg-error text-[#FDFAF5] hover:bg-[#7a3232] active:translate-y-[1px]': variant === 'danger',
+            'bg-transparent text-fg hover:bg-surface-secondary/60': variant === 'ghost',
+            'rounded-[6px] px-[14px] py-[6px] text-[12px]': size === 'sm',
+            'rounded-[8px] px-[20px] py-[10px] text-[13px]': size === 'md',
+            'rounded-[8px] px-[26px] py-[13px] text-[14px]': size === 'lg',
           },
           className
         )}

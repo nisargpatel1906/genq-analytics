@@ -1448,8 +1448,8 @@ def viz_coder_node(state: AnalysisGraphState) -> dict:
 
     prompt = VIZ_CODER_PROMPT.format(
         domain=state.get("domain_brief", {}).get("domain", "Unknown"),
-        full_analysis=json.dumps(state.get("analysis_results", {}), default=str),
-        visualization_data=json.dumps(state.get("visualization_data", {}), default=str),
+        full_analysis=json.dumps(state.get("analysis_results", {}), default=str)[:4000],
+        visualization_data=json.dumps(state.get("visualization_data", {}), default=str)[:4000],
         schema=json.dumps(state.get("schema", {}), default=str),
         currency_context=currency_context,
     )
@@ -1481,7 +1481,65 @@ def viz_coder_node(state: AnalysisGraphState) -> dict:
             logger.warning(f"Viz Coder generation error (attempt {gen_attempt + 1}): {e}")
 
     if not code:
-        return {"error": "Viz Coder agent failed to return Python plotting code after multiple attempts.", "viz_error": "No code generated"}
+        logger.info("Generating standard programmatic visualization script fallback...")
+        viz_specs = state.get("visualization_data", {}).get("visualizations", [])
+        df = state["df"]
+        safe_num = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c]) and df[c].notna().sum() > 5]
+        code_lines = [
+            "import matplotlib.pyplot as plt",
+            "import seaborn as sns",
+            "import pandas as pd",
+            "import numpy as np",
+            "import os",
+            "output_dir = 'charts'",
+            "os.makedirs(output_dir, exist_ok=True)",
+            "sns.set_theme(style='whitegrid')",
+        ]
+        if viz_specs:
+            for idx, spec in enumerate(viz_specs[:4]):
+                title = str(spec.get("finding_title", f"Chart {idx+1}")).replace("'", "\\'")
+                x_col = spec.get("x_axis") if spec.get("x_axis") in df.columns else (safe_num[0] if safe_num else None)
+                y_col = spec.get("y_axis") if spec.get("y_axis") in df.columns else (safe_num[1] if len(safe_num) > 1 else None)
+                fname = f"chart_{idx+1}.png"
+                code_lines.append("plt.figure(figsize=(9, 5))")
+                if x_col and y_col and x_col != y_col:
+                    code_lines.extend([
+                        f"plot_df = df[['{x_col}', '{y_col}']].dropna()",
+                        "if len(plot_df) > 0:",
+                        f"    sns.scatterplot(data=plot_df, x='{x_col}', y='{y_col}', color='#4f46e5', alpha=0.7)",
+                        f"    plt.title('{title}', fontsize=12, fontweight='bold', pad=12)",
+                        "    plt.tight_layout()",
+                        f"    plt.savefig(os.path.join(output_dir, '{fname}'), dpi=150)",
+                        f"    manifest_outputs.append({{'type': 'image', 'filename': '{fname}', 'finding_title': '{title}', 'purpose': '{title}'}})",
+                        "plt.close()",
+                    ])
+                elif x_col:
+                    code_lines.extend([
+                        f"plot_df = df[['{x_col}']].dropna()",
+                        "if len(plot_df) > 0:",
+                        f"    sns.histplot(data=plot_df, x='{x_col}', kde=True, color='#0284c7')",
+                        f"    plt.title('{title}', fontsize=12, fontweight='bold', pad=12)",
+                        "    plt.tight_layout()",
+                        f"    plt.savefig(os.path.join(output_dir, '{fname}'), dpi=150)",
+                        f"    manifest_outputs.append({{'type': 'image', 'filename': '{fname}', 'finding_title': '{title}', 'purpose': '{title}'}})",
+                        "plt.close()",
+                    ])
+        elif safe_num:
+            for idx, col in enumerate(safe_num[:3]):
+                fname = f"chart_{idx+1}.png"
+                title = f"Distribution of {col}".replace("'", "\\'")
+                code_lines.extend([
+                    "plt.figure(figsize=(9, 5))",
+                    f"plot_df = df[['{col}']].dropna()",
+                    "if len(plot_df) > 0:",
+                    f"    sns.histplot(data=plot_df, x='{col}', kde=True, color='#2563eb')",
+                    f"    plt.title('{title}', fontsize=12, fontweight='bold', pad=12)",
+                    "    plt.tight_layout()",
+                    f"    plt.savefig(os.path.join(output_dir, '{fname}'), dpi=150)",
+                    f"    manifest_outputs.append({{'type': 'image', 'filename': '{fname}', 'finding_title': '{title}', 'purpose': '{title}'}})",
+                    "plt.close()",
+                ])
+        code = "\n".join(code_lines)
 
     logger.info("Executing generated visualization code...")
     exec_res = execute_analysis_code(code, state["df"], timeout_seconds=int(os.environ.get("CODE_EXEC_TIMEOUT", "90")))

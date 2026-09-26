@@ -1,31 +1,37 @@
-@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,500;0,600;0,700;0,900;1,400;1,700&family=DM+Mono:ital,wght@0,300;0,400;0,500;1,300;1,400&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,400;0,500;0,600;1,400&family=Manrope:wght@300;400;500;600;700;800&family=Noto+Serif:ital,wght@0,400;0,600;0,700;1,400;1,700&display=swap');
 
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 :root {
-  --color-bg:        #F5F0E8;  /* Page background */
-  --color-fg:        #1A1208;  /* Primary text */
-  --color-surface:   #EDE4D0;  /* Card backgrounds */
-  --color-border:    #D4C9B0;  /* Dividers, borders */
-  --color-accent:    #8B6F3E;  /* CTAs, highlights, active */
-  --color-accent-hover: #A68B5B;
-  --color-accent-muted: #C2A87A;
+  /* Cognitive Heritage Design System Tokens */
+  --color-bg:                 #F2EDE3;  /* Main page background (warm off-white / parchment) */
+  --color-fg:                 #1A1208;  /* Primary text, headings, dark backgrounds */
+  --color-surface:            #FDFAF5;  /* Card surfaces, elevated panels, modals */
+  --color-surface-secondary:  #EDE4D0;  /* Card section fills, active nav pills, hover states */
+  --color-border:             #D4C9B0;  /* Dividers, borders, subtle separators */
+  --color-muted:              #9B8E7A;  /* Secondary labels, metadata, captions, placeholder text */
+  --color-accent:             #8B6F3E;  /* Primary CTAs, active items, highlights */
+  --color-accent-hover:       #A68B5B;
+  --color-accent-muted:       #9B8E7A;
 
   /* Semantic */
-  --color-success:   #5C6E3E;
-  --color-warning:   #B8860B;
-  --color-error:     #8B3A3A;
-  --color-info:      #3A5F8B;
+  --color-success:            #5C6E3E;  /* Confirmed findings, pass status */
+  --color-warning:            #B8860B;  /* Cautions, warnings, anomalies */
+  --color-error:              #8B3A3A;  /* Critical risk, errors */
+  --color-info:               #755C3B;  /* Supplementary notes, breadcrumbs */
 
-  --font-heading: 'Playfair Display', Georgia, serif;
-  --font-body:    'DM Mono', 'Courier New', monospace;
+  /* Typography */
+  --font-heading: 'Noto Serif', Georgia, serif;
+  --font-body:    'Manrope', system-ui, -apple-system, sans-serif;
+  --font-mono:    'JetBrains Mono', 'Fira Code', monospace;
 
-  --shadow-sm:  0 1px 3px rgba(26,18,8,0.08);
-  --shadow-md:  0 4px 12px rgba(26,18,8,0.10);
-  --shadow-lg:  0 8px 24px rgba(26,18,8,0.12);
-  --shadow-xl:  0 16px 48px rgba(26,18,8,0.14);
+  /* Shadows */
+  --shadow-sm:  0 1px 3px rgba(26, 18, 8, 0.08);
+  --shadow-md:  0 4px 12px rgba(26, 18, 8, 0.09);
+  --shadow-lg:  0 8px 24px rgba(26, 18, 8, 0.10);
+  --shadow-xl:  0 16px 48px rgba(26, 18, 8, 0.12);
 }
 
 body {
@@ -33,10 +39,37 @@ body {
   background: var(--color-bg);
   color: var(--color-fg);
   min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
-h1, h2, h3, h4 {
+h1, h2, h3 {
   font-family: var(--font-heading);
+}
+
+code, kbd, samp, pre {
+  font-family: var(--font-mono);
+}
+
+::selection {
+  background: #EDE4D0;
+  color: #1A1208;
+}
+
+/* Custom Scholarly Scrollbars */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: var(--color-bg);
+}
+::-webkit-scrollbar-thumb {
+  background: #D4C9B0;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #9B8E7A;
 }
 
 @layer utilities {

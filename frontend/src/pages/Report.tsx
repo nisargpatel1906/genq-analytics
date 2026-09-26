@@ -17,8 +17,12 @@ import remarkGfm from 'remark-gfm';
 // ── Severity badge ────────────────────────────────────────────────────────────
 const SevBadge = ({ sev }: { sev?: string }) => {
   const s = (sev || 'medium').toLowerCase();
-  const cls = s === 'high' ? 'bg-red-100 text-red-700' : s === 'low' ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700';
-  return <span className={`text-[11px] font-bold px-2 py-0.5 rounded uppercase tracking-wider ${cls}`}>{s}</span>;
+  const cls = s === 'high'
+    ? 'bg-[#8B3A3A]/15 text-[#8B3A3A] border border-[#8B3A3A]/30'
+    : s === 'low'
+    ? 'bg-[#5C6E3E]/15 text-[#5C6E3E] border border-[#5C6E3E]/30'
+    : 'bg-[#B8860B]/15 text-[#B8860B] border border-[#B8860B]/30';
+  return <span className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded-[4px] uppercase tracking-wider ${cls}`}>{s}</span>;
 };
 
 // ── Markdown Renderer ────────────────────────────────────────────────────────
@@ -51,11 +55,11 @@ export function Report() {
   // Customization state
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<'colors' | 'sections' | 'export'>('colors');
-  const [accentColor, setAccentColor] = useState('#1A56DB');
-  const [fontColor, setFontColor] = useState('#111111');
+  const [accentColor, setAccentColor] = useState('#8B6F3E');
+  const [fontColor, setFontColor] = useState('#1A1208');
   const [chartPalette, setChartPalette] = useState([
-    '#4E79A7','#F28E2B','#E15759','#76B7B2','#59A14F',
-    '#EDC949','#AF7AA1','#FF9DA7','#9C755F','#BAB0AB'
+    '#8B6F3E', '#A68B5B', '#5C6E3E', '#B8860B', '#755C3B',
+    '#C2A87A', '#8B3A3A', '#3D2E1A', '#6B5A42', '#D4C9B0'
   ]);
   const [sections, setSections] = useState({
     executiveSummary: true,
@@ -1286,9 +1290,9 @@ export function Report() {
                         ))}
                       </div>
                       <button
-                        className="mt-3 text-[11px] text-fg/50 hover:text-accent underline"
-                        onClick={() => setChartPalette(['#4E79A7','#F28E2B','#E15759','#76B7B2','#59A14F','#EDC949','#AF7AA1','#FF9DA7','#9C755F','#BAB0AB'])}
-                      >Reset to Tableau palette</button>
+                        className="mt-3 text-[11px] text-muted hover:text-accent underline font-body"
+                        onClick={() => setChartPalette(['#8B6F3E', '#A68B5B', '#5C6E3E', '#B8860B', '#755C3B', '#C2A87A', '#8B3A3A', '#3D2E1A', '#6B5A42', '#D4C9B0'])}
+                      >Reset to Cognitive Heritage palette</button>
                     </div>
                   </>
                 )}

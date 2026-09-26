@@ -11,8 +11,11 @@ import {
   ArrowRight,
   Flame,
   Check,
-  X
+  X,
+  Zap,
+  Star
 } from 'lucide-react';
+import { Logo } from './ui/Logo';
 import { Button } from './ui/Button';
 import {
   useAnalysisStore,
@@ -101,7 +104,7 @@ export function DiscoveryAlignmentCard({
     try {
       await alignJob(jobId, answers, selectedModules, false);
       onLaunch();
-    } catch (e) {
+    } catch {
       setIsSubmitting(false);
     }
   };
@@ -112,30 +115,31 @@ export function DiscoveryAlignmentCard({
     try {
       await alignJob(jobId, answers, selectedModules, true);
       onLaunch();
-    } catch (e) {
+    } catch {
       setIsSubmitting(false);
     }
   };
 
   // Module Icon Helper
   const getModuleIcon = (id: string) => {
+    const iconClass = "w-4 h-4 text-accent stroke-[1.75]";
     switch (id) {
       case 'forecaster':
-        return <TrendingUp className="w-4 h-4 text-[#8B6F3E]" />;
+        return <TrendingUp className={iconClass} />;
       case 'cohort_analyst':
-        return <Layers className="w-4 h-4 text-[#8B6F3E]" />;
+        return <Layers className={iconClass} />;
       case 'experimentation':
-        return <Flame className="w-4 h-4 text-[#8B6F3E]" />;
+        return <Flame className={iconClass} />;
       case 'ml_modeler':
-        return <Brain className="w-4 h-4 text-[#8B6F3E]" />;
+        return <Brain className={iconClass} />;
       case 'causal_analyst':
-        return <GitBranch className="w-4 h-4 text-[#8B6F3E]" />;
+        return <GitBranch className={iconClass} />;
       case 'anomaly_detector':
-        return <ShieldAlert className="w-4 h-4 text-[#8B6F3E]" />;
+        return <ShieldAlert className={iconClass} />;
       case 'benchmarking':
-        return <Award className="w-4 h-4 text-[#8B6F3E]" />;
+        return <Award className={iconClass} />;
       default:
-        return <BarChart2 className="w-4 h-4 text-[#8B6F3E]" />;
+        return <BarChart2 className={iconClass} />;
     }
   };
 
@@ -144,33 +148,34 @@ export function DiscoveryAlignmentCard({
       initial={{ opacity: 0, y: 15 }}
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, y: -15 }}
-      className="w-full bg-[#FAF7F2] border border-[#D4C9B0] rounded-[16px] overflow-hidden shadow-md text-[#1A1208]"
+      className="w-full bg-surface border border-border rounded-[12px] overflow-hidden shadow-custom-md text-fg"
     >
       {/* ── Top Header Banner ── */}
-      <div className="p-6 md:p-8 border-b border-[#D4C9B0] bg-gradient-to-r from-[#EDE4D0]/90 to-[#FAF7F2]">
+      <div className="p-6 md:p-8 border-b border-border bg-gradient-to-r from-surface-secondary/80 to-surface">
         <div className="flex flex-wrap items-center justify-between gap-4 mb-3">
-          <div className="flex items-center gap-2.5">
-            <span className="w-2.5 h-2.5 rounded-full bg-[#8B6F3E] animate-pulse" />
-            <span className="font-mono text-[11px] tracking-wider uppercase font-semibold text-[#8B6F3E] bg-[#EDE4D0] px-2.5 py-1 rounded border border-[#D4C9B0]">
+          <div className="flex flex-wrap items-center gap-2.5">
+            <span className="w-2.5 h-2.5 rounded-full bg-accent animate-pulse" />
+            <span className="font-mono text-[11px] tracking-wider uppercase font-semibold text-accent bg-surface-secondary px-2.5 py-1 rounded-[4px] border border-border">
               {profile.domain} ({profile.domain_confidence}% Match)
             </span>
-            <span className="font-mono text-[11px] text-[#6B5B4E] bg-[#EDE4D0]/60 px-2 py-0.5 rounded border border-[#D4C9B0]/60">
+            <span className="font-mono text-[11px] text-muted bg-surface-secondary/60 px-2 py-0.5 rounded-[4px] border border-border/60">
               {profile.dataset_summary}
             </span>
           </div>
 
           <div className="flex items-center gap-2">
-            <span className="font-mono text-[11px] text-[#8B6F3E] bg-[#EDE4D0] px-2.5 py-1 rounded border border-[#8B6F3E]/40 font-medium">
-              🌿 {unselectedCount > 0 ? `-${estimatedSavingsPct}% Tokens & Compute Saved` : 'Full Spectrum Suite'}
+            <span className="font-mono text-[11px] text-accent bg-surface-secondary px-2.5 py-1 rounded-[6px] border border-accent/30 font-semibold flex items-center gap-1.5">
+              <Logo size={14} className="text-accent" />
+              {unselectedCount > 0 ? `-${estimatedSavingsPct}% Compute Optimized` : 'Full Spectrum Suite'}
             </span>
           </div>
         </div>
 
-        <h2 className="font-serif text-[26px] md:text-[30px] font-bold text-[#1A1208] leading-tight">
-          Business Discovery & Strategic Alignment
+        <h2 className="font-heading text-[26px] md:text-[30px] font-bold text-fg leading-tight">
+          Business Discovery &amp; Strategic Alignment
         </h2>
-        <p className="font-mono text-[13px] text-[#6B5B4E] mt-1.5 max-w-[700px] leading-relaxed">
-          {profile.domain_description} To ensure maximum precision and avoid running unnecessary models, align your business context and select only the modules your problem statement requires.
+        <p className="font-body text-[14px] text-muted mt-2 max-w-[720px] leading-relaxed">
+          {profile.domain_description} To guarantee rigorous analytical precision and optimize execution efficiency, tailor your business context and select specific quantitative modules.
         </p>
       </div>
 
@@ -178,18 +183,18 @@ export function DiscoveryAlignmentCard({
         {/* ── Section 1: Dynamic Discovery Q&A ── */}
         <div>
           <div className="flex items-center gap-2 mb-4">
-            <div className="w-6 h-6 rounded-full bg-[#8B6F3E]/10 border border-[#8B6F3E]/30 flex items-center justify-center text-[#8B6F3E] font-mono text-[12px] font-bold">
+            <div className="w-6 h-6 rounded-full bg-surface-secondary border border-border flex items-center justify-center text-accent font-mono text-[12px] font-bold">
               1
             </div>
-            <h3 className="font-serif text-[18px] font-bold text-[#1A1208]">
+            <h3 className="font-heading text-[18px] font-bold text-fg">
               Business Alignment Questions
             </h3>
-            <span className="font-mono text-[11px] text-[#6B5B4E] ml-2">
-              (Directs autonomous hypothesis formulation & peer debate)
+            <span className="font-body text-[12px] text-muted ml-2">
+              (Directs autonomous hypothesis formulation &amp; peer debate)
             </span>
           </div>
 
-          <div className="space-y-6">
+          <div className="space-y-5">
             {(profile.questions || []).map((q) => {
               const currentVal = answers[q.id] || '';
               const isCustom = customInputs[q.id] !== undefined && customInputs[q.id] !== '';
@@ -197,20 +202,20 @@ export function DiscoveryAlignmentCard({
               return (
                 <div
                   key={q.id}
-                  className="p-5 rounded-[12px] bg-[#EDE4D0]/30 border border-[#D4C9B0] transition-all hover:border-[#8B6F3E]/50"
+                  className="p-5 rounded-[10px] bg-surface-secondary/30 border border-border transition-all hover:border-accent/50"
                 >
                   <div className="flex items-start justify-between gap-3 mb-2">
                     <div>
-                      <span className="font-mono text-[10px] tracking-wider uppercase font-semibold text-[#8B6F3E] bg-[#EDE4D0] px-2 py-0.5 rounded border border-[#D4C9B0] mr-2">
+                      <span className="font-body text-[10px] tracking-wider uppercase font-semibold text-accent bg-surface-secondary px-2 py-0.5 rounded-[4px] border border-border mr-2">
                         {q.category}
                       </span>
-                      <span className="font-serif text-[15px] font-bold text-[#1A1208]">
+                      <span className="font-heading text-[16px] font-semibold text-fg">
                         {q.title}
                       </span>
                     </div>
                   </div>
 
-                  <p className="font-mono text-[12px] text-[#6B5B4E] mb-3">
+                  <p className="font-body text-[13px] text-muted mb-3 leading-relaxed">
                     {q.description}
                   </p>
 
@@ -223,10 +228,10 @@ export function DiscoveryAlignmentCard({
                           key={opt}
                           type="button"
                           onClick={() => handleSelectOption(q.id, opt)}
-                          className={`text-left font-mono text-[12px] px-3.5 py-2 rounded-[8px] transition-all duration-150 border ${
+                          className={`text-left font-body text-[13px] px-3.5 py-2 rounded-[8px] transition-all duration-150 border ${
                             isSelected
-                              ? 'bg-[#8B6F3E] text-[#F5F0E8] border-[#8B6F3E] font-medium shadow-sm'
-                              : 'bg-[#FAF7F2] text-[#1A1208] border-[#D4C9B0] hover:bg-[#EDE4D0] hover:border-[#8B6F3E]/40'
+                              ? 'bg-accent text-[#FDFAF5] border-accent font-semibold shadow-custom-sm'
+                              : 'bg-surface text-fg border-border hover:bg-surface-secondary hover:border-accent/40'
                           }`}
                         >
                           <span className="flex items-center gap-1.5">
@@ -246,7 +251,7 @@ export function DiscoveryAlignmentCard({
                         value={customInputs[q.id] || ''}
                         onChange={(e) => handleCustomChange(q.id, e.target.value)}
                         placeholder={q.custom_placeholder || 'Or write custom business nuance...'}
-                        className="w-full bg-[#FAF7F2] border border-[#D4C9B0] focus:border-[#8B6F3E] focus:ring-1 focus:ring-[#8B6F3E] rounded-[8px] px-3.5 py-2 font-mono text-[12px] text-[#1A1208] placeholder:text-[#6B5B4E]/60 outline-none transition-all"
+                        className="w-full bg-surface border border-border focus:border-accent focus:ring-1 focus:ring-accent rounded-[8px] px-3.5 py-2 font-body text-[13px] text-fg placeholder:text-muted/60 outline-none transition-all"
                       />
                     </div>
                   )}
@@ -260,19 +265,19 @@ export function DiscoveryAlignmentCard({
         <div>
           <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
             <div className="flex items-center gap-2">
-              <div className="w-6 h-6 rounded-full bg-[#8B6F3E]/10 border border-[#8B6F3E]/30 flex items-center justify-center text-[#8B6F3E] font-mono text-[12px] font-bold">
+              <div className="w-6 h-6 rounded-full bg-surface-secondary border border-border flex items-center justify-center text-accent font-mono text-[12px] font-bold">
                 2
               </div>
-              <h3 className="font-serif text-[18px] font-bold text-[#1A1208]">
+              <h3 className="font-heading text-[18px] font-bold text-fg">
                 Selective Analysis Modules
               </h3>
-              <span className="font-mono text-[11px] text-[#6B5B4E] ml-2">
-                (Adaptive execution: bypass irrelevant agents to save compute)
+              <span className="font-body text-[12px] text-muted ml-2">
+                (Adaptive execution: bypass irrelevant agents to streamline processing)
               </span>
             </div>
 
             <div className="flex items-center gap-2">
-              <span className="font-mono text-[12px] text-[#1A1208] font-medium bg-[#EDE4D0] px-3 py-1 rounded-full border border-[#D4C9B0]">
+              <span className="font-mono text-[11px] text-fg font-medium bg-surface-secondary px-3 py-1 rounded-[6px] border border-border">
                 {selectedCount} of {totalSeniorModules} Modules Selected
               </span>
             </div>
@@ -287,12 +292,12 @@ export function DiscoveryAlignmentCard({
                 <div
                   key={m.id}
                   onClick={() => handleToggleModule(m.id, isViable)}
-                  className={`p-4 rounded-[12px] border transition-all select-none ${
+                  className={`p-4 rounded-[10px] border transition-all select-none ${
                     !isViable
-                      ? 'bg-[#EDE4D0]/20 border-[#D4C9B0]/50 opacity-60 cursor-not-allowed'
+                      ? 'bg-surface-secondary/20 border-border/50 opacity-50 cursor-not-allowed'
                       : isSelected
-                      ? 'bg-[#FAF7F2] border-[#8B6F3E] shadow-sm cursor-pointer hover:border-[#8B6F3E]'
-                      : 'bg-[#EDE4D0]/30 border-[#D4C9B0] cursor-pointer hover:bg-[#EDE4D0]/50'
+                      ? 'bg-surface border-accent shadow-custom-sm cursor-pointer hover:border-accent'
+                      : 'bg-surface-secondary/30 border-border cursor-pointer hover:bg-surface-secondary/50'
                   }`}
                 >
                   <div className="flex items-start justify-between gap-3">
@@ -300,24 +305,24 @@ export function DiscoveryAlignmentCard({
                       <div
                         className={`w-5 h-5 rounded-[5px] mt-0.5 border flex items-center justify-center transition-all ${
                           !isViable
-                            ? 'border-[#D4C9B0] bg-[#EDE4D0]/50'
+                            ? 'border-border bg-surface-secondary/50'
                             : isSelected
-                            ? 'border-[#8B6F3E] bg-[#8B6F3E] text-[#F5F0E8]'
-                            : 'border-[#D4C9B0] bg-[#FAF7F2]'
+                            ? 'border-accent bg-accent text-[#FDFAF5]'
+                            : 'border-border bg-surface'
                         }`}
                       >
                         {isSelected && isViable && <Check className="w-3.5 h-3.5 stroke-[2.5]" />}
-                        {!isViable && <X className="w-3 h-3 text-[#A23B2A]" />}
+                        {!isViable && <X className="w-3 h-3 text-error" />}
                       </div>
 
                       <div>
                         <div className="flex items-center gap-2">
                           {getModuleIcon(m.id)}
-                          <span className={`font-serif text-[14px] font-bold ${isViable ? 'text-[#1A1208]' : 'text-[#6B5B4E]'}`}>
+                          <span className={`font-heading text-[15px] font-bold ${isViable ? 'text-fg' : 'text-muted'}`}>
                             {m.name}
                           </span>
                         </div>
-                        <p className="font-mono text-[11px] text-[#6B5B4E] mt-1 leading-snug">
+                        <p className="font-body text-[12px] text-muted mt-1 leading-snug">
                           {m.role || m.description}
                         </p>
                       </div>
@@ -327,19 +332,19 @@ export function DiscoveryAlignmentCard({
                       {isViable ? (
                         <>
                           {m.recommended && (
-                            <span className="font-mono text-[10px] uppercase font-bold text-[#8B6F3E] bg-[#EDE4D0] px-2 py-0.5 rounded border border-[#8B6F3E]/30">
-                              ⭐ Recommended
+                            <span className="font-body text-[10px] uppercase font-semibold text-accent bg-surface-secondary px-2 py-0.5 rounded-[4px] border border-accent/30 flex items-center gap-1">
+                              <Star className="w-2.5 h-2.5 fill-accent" /> Recommended
                             </span>
                           )}
                           {!isSelected && (
-                            <span className="font-mono text-[10px] text-[#2D5A43] font-semibold bg-[#2D5A43]/10 px-2 py-0.5 rounded border border-[#2D5A43]/20">
+                            <span className="font-mono text-[10px] text-success font-semibold bg-success/15 px-2 py-0.5 rounded-[4px] border border-success/30">
                               Save ~{m.token_savings_pct}%
                             </span>
                           )}
                         </>
                       ) : (
-                        <span className="font-mono text-[10px] font-semibold text-[#A23B2A] bg-[#A23B2A]/10 px-2 py-0.5 rounded border border-[#A23B2A]/20">
-                          Not Viable: {m.reason}
+                        <span className="font-body text-[10px] font-semibold text-error bg-error/15 px-2 py-0.5 rounded-[4px] border border-error/30">
+                          Unavailable: {m.reason}
                         </span>
                       )}
                     </div>
@@ -351,39 +356,43 @@ export function DiscoveryAlignmentCard({
         </div>
 
         {/* ── Footer Actions ── */}
-        <div className="pt-4 border-t border-[#D4C9B0] flex flex-wrap items-center justify-between gap-4">
+        <div className="pt-5 border-t border-border flex flex-wrap items-center justify-between gap-4">
           <button
             type="button"
             onClick={onCancel}
             disabled={isSubmitting}
-            className="font-mono text-[13px] text-[#6B5B4E] hover:text-[#1A1208] transition-colors"
+            className="font-body text-[13px] text-muted hover:text-fg transition-colors"
           >
-            ← Cancel & Upload Different File
+            &larr; Cancel &amp; Deposit Different Dataset
           </button>
 
           <div className="flex items-center gap-3">
-            <button
+            <Button
               type="button"
+              variant="outlined"
+              size="md"
               onClick={handleQuickAuto}
               disabled={isSubmitting}
-              className="px-4 py-2.5 rounded-[8px] border border-[#D4C9B0] bg-[#FAF7F2] hover:bg-[#EDE4D0] font-mono text-[13px] text-[#1A1208] font-medium transition-all"
+              className="gap-2"
             >
-              ⚡ Quick Auto-Analyze (All Viable)
-            </button>
+              <Zap className="w-3.5 h-3.5 text-accent" /> Quick Synthesis (All Viable)
+            </Button>
 
             <Button
+              variant="primary"
+              size="md"
               onClick={handleLaunchAligned}
               disabled={isSubmitting || selectedModules.length === 0}
-              className="px-6 py-2.5 bg-[#8B6F3E] hover:bg-[#725a31] text-[#F5F0E8] font-mono text-[13px] font-semibold rounded-[8px] shadow-sm flex items-center gap-2 transition-all"
+              className="gap-2"
             >
               {isSubmitting ? (
                 <>
-                  <div className="w-4 h-4 border-2 border-[#F5F0E8] border-t-transparent rounded-full animate-spin" />
-                  <span>Launching Pipeline...</span>
+                  <div className="w-4 h-4 border-2 border-[#FDFAF5] border-t-transparent rounded-full animate-spin" />
+                  <span>Initiating Pipeline...</span>
                 </>
               ) : (
                 <>
-                  <span>Launch Aligned Analysis</span>
+                  <span>Initiate Aligned Synthesis</span>
                   <ArrowRight className="w-4 h-4" />
                 </>
               )}

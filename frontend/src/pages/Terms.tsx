@@ -5,7 +5,7 @@ export function TermsOfService() {
     <div className="max-w-[800px] mx-auto py-20 px-6 font-body text-fg">
       <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-8">
         <h1 className="font-heading text-[40px] font-bold">Terms of Service</h1>
-        <p className="text-fg/60">Effective Date: April 30, 2026</p>
+        <p className="text-muted">Effective Date: April 30, 2026</p>
         
         <div className="space-y-6 text-[15px] leading-relaxed text-fg/80">
           <section className="space-y-3">

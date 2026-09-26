@@ -1,11 +1,22 @@
 import logging
 import os
+import io
 import base64
 import json
+from typing import Optional, List, Dict, Any
 import pandas as pd
 import numpy as np
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
+from sklearn.linear_model import LinearRegression, Ridge
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score, confusion_matrix, r2_score, mean_squared_error, mean_absolute_error
+from sklearn.preprocessing import LabelEncoder
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, Response
 from pydantic import BaseModel
 from app.db import reports_db
 from dotenv import load_dotenv
@@ -35,10 +46,40 @@ class ChatRequest(BaseModel):
         return self.message or self.question or ""
 
 
-
 class NLSQLRequest(BaseModel):
     question: str
     dialect: str = "sqlite"
+
+
+class TrainModelRequest(BaseModel):
+    target_col: Optional[str] = None
+    feature_cols: Optional[List[str]] = None
+
+
+class SimulateGrowthRequest(BaseModel):
+    metric_col: Optional[str] = None
+    growth_rate_pct: float = 15.0
+    years: int = 5
+
+
+class RoadmapRequest(BaseModel):
+    focus_area: str = "all"
+    horizon_days: int = 90
+
+
+class CausalWhatIfRequest(BaseModel):
+    treatment_col: Optional[str] = None
+    outcome_col: Optional[str] = None
+    delta_change_pct: float = 10.0
+
+
+class ExecuteCodeRequest(BaseModel):
+    code: str
+
+
+class ExportChatRequest(BaseModel):
+    title: Optional[str] = "Executive Analysis Memo"
+    history: List[ChatMessage] = []
 
 
 def _get_report_dataframe(report_id: str, report_data: dict) -> pd.DataFrame:
@@ -307,8 +348,42 @@ async def chat_with_report(report_id: str, body: ChatRequest):
     # Run live computation if query is quantitative
     computed_stdout, chart_embeds = _execute_chat_code_query(user_msg, df, report_context)
 
+    # Check for direct Copilot tool triggers in user query
+    tool_chart = None
+    msg_low = user_msg.lower()
+    if any(k in msg_low for k in ["simulate growth", "run simulation", "growth projection", "5-year growth", "monte carlo"]):
+        try:
+            sim_res = tool_simulate_growth_scenario(df, growth_rate_pct=15.0, years=5)
+            if "chart_base64" in sim_res:
+                chart_embeds.append(f"\n\n![Growth Projection](data:image/png;base64,{sim_res['chart_base64']})\n\n")
+            computed_stdout += f"\n\n[GROWTH SIMULATION RESULTS]\n{sim_res.get('narrative', '')}\nTable: {json.dumps(sim_res.get('table', []))[:1000]}"
+        except Exception as e:
+            logger.warning(f"Chat simulation trigger error: {e}")
+    elif any(k in msg_low for k in ["train model", "train predictive model", "custom model", "predictive model", "train a model"]):
+        try:
+            mod_res = tool_train_custom_model(df)
+            if "chart_base64" in mod_res:
+                chart_embeds.append(f"\n\n![Model Drivers & Fit](data:image/png;base64,{mod_res['chart_base64']})\n\n")
+            computed_stdout += f"\n\n[CUSTOM MODEL RESULTS]\n{mod_res.get('narrative', '')}\nMetrics: {json.dumps(mod_res.get('metrics', {}))}"
+        except Exception as e:
+            logger.warning(f"Chat train model trigger error: {e}")
+    elif any(k in msg_low for k in ["causal what-if", "what-if", "counterfactual", "sensitivity analysis"]):
+        try:
+            cw_res = tool_run_causal_what_if(df)
+            if "chart_base64" in cw_res:
+                chart_embeds.append(f"\n\n![Causal What-If Sensitivity](data:image/png;base64,{cw_res['chart_base64']})\n\n")
+            computed_stdout += f"\n\n[CAUSAL WHAT-IF RESULTS]\n{cw_res.get('narrative', '')}"
+        except Exception as e:
+            logger.warning(f"Chat causal what-if trigger error: {e}")
+    elif any(k in msg_low for k in ["30-60-90", "strategic roadmap", "action roadmap", "execution roadmap"]):
+        try:
+            rm_res = tool_generate_strategic_roadmap(report_context, dataset_info)
+            computed_stdout += f"\n\n[STRATEGIC ROADMAP]\n{rm_res.get('markdown', '')}"
+        except Exception as e:
+            logger.warning(f"Chat roadmap trigger error: {e}")
+
     if computed_stdout:
-        system_prompt += f"\n\n--- LIVE COMPUTATION OUTPUT ---\n{computed_stdout[:2000]}\n\nGround your answer in these exact computed figures. Do not hallucinate different numbers."
+        system_prompt += f"\n\n--- LIVE COMPUTATION / TOOL OUTPUT ---\n{computed_stdout[:2500]}\n\nGround your answer in these exact computed figures and strategic findings. Do not hallucinate different numbers."
 
     llm_messages = [{"role": "system", "content": system_prompt}]
     for h in body.history[-12:]:  # Larger history window (12 turns)
@@ -438,8 +513,688 @@ async def nl_to_sql(report_id: str, body: NLSQLRequest):
         logger.error(f"NL-SQL endpoint error: {e}")
         raise HTTPException(status_code=500, detail=f"NL→SQL conversion failed: {e}")
 
+# ==============================================================================
+# COPILOT ACTION SUITE: ADVANCED ANALYTICAL TOOLS
+# ==============================================================================
 
-@router.get("/reports/{report_id}/insights")
+def tool_train_custom_model(
+    df: pd.DataFrame,
+    target_col: Optional[str] = None,
+    feature_cols: Optional[List[str]] = None
+) -> dict:
+    """Trains a Random Forest classifier or regressor, returning metrics, drivers, and visualization."""
+    if df.empty:
+        return {"error": "Dataset is empty"}
+
+    # Target column selection
+    if not target_col or target_col not in df.columns:
+        # Prioritize binary / churn / classification columns
+        cand_targets = [
+            c for c in df.columns
+            if df[c].nunique() == 2 or any(k in c.lower() for k in ["churn", "target", "converted", "attrition", "status", "label", "purchased"])
+        ]
+        if cand_targets:
+            target_col = cand_targets[0]
+        else:
+            num_cols = df.select_dtypes(include="number").columns.tolist()
+            target_col = num_cols[-1] if num_cols else df.columns[-1]
+
+    # Feature columns selection
+    if not feature_cols:
+        id_patterns = ["id", "uuid", "guid", "code", "index", "key", "url", "email", "address", "phone"]
+        cand_features = []
+        for c in df.columns:
+            if c == target_col:
+                continue
+            c_low = c.lower()
+            if any(p in c_low for p in id_patterns) and df[c].nunique() > len(df) * 0.5:
+                continue
+            if df[c].nunique() <= 1:
+                continue
+            cand_features.append(c)
+        feature_cols = cand_features[:12]
+
+    if not feature_cols:
+        return {"error": "No valid predictive features found in dataset"}
+
+    # Clean data
+    df_clean = df[[target_col] + feature_cols].dropna(subset=[target_col]).copy()
+    if len(df_clean) < 10:
+        return {"error": f"Insufficient non-null rows ({len(df_clean)}) for training on {target_col}"}
+
+    y_raw = df_clean[target_col]
+    is_classification = (y_raw.dtype == 'object' or str(y_raw.dtype).startswith('bool') or y_raw.nunique() <= 5)
+
+    X = pd.DataFrame(index=df_clean.index)
+    for col in feature_cols:
+        s = df_clean[col]
+        if pd.api.types.is_numeric_dtype(s):
+            X[col] = s.fillna(s.median())
+        else:
+            le = LabelEncoder()
+            X[col] = le.fit_transform(s.astype(str).fillna("missing"))
+
+    if is_classification:
+        target_le = LabelEncoder()
+        y = target_le.fit_transform(y_raw.astype(str))
+        target_classes = [str(c) for c in target_le.classes_]
+    else:
+        y = y_raw.values.astype(float)
+        target_classes = []
+
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(13, 5), dpi=120)
+    fig.patch.set_facecolor('#FAF7F2')
+    ax1.set_facecolor('#FAF7F2')
+    ax2.set_facecolor('#FAF7F2')
+
+    metrics = {}
+    top_drivers = []
+
+    if is_classification:
+        clf = RandomForestClassifier(n_estimators=100, max_depth=7, random_state=42)
+        clf.fit(X_train, y_train)
+        y_pred = clf.predict(X_test)
+        acc = float(accuracy_score(y_test, y_pred))
+        f1 = float(f1_score(y_test, y_pred, average="weighted", zero_division=0))
+        prec = float(precision_score(y_test, y_pred, average="weighted", zero_division=0))
+        rec = float(recall_score(y_test, y_pred, average="weighted", zero_division=0))
+        metrics = {
+            "task": "classification",
+            "accuracy": round(acc, 4),
+            "f1_score": round(f1, 4),
+            "precision": round(prec, 4),
+            "recall": round(rec, 4),
+            "classes": target_classes
+        }
+        importances = clf.feature_importances_
+        feat_imp = sorted(zip(feature_cols, importances), key=lambda x: x[1], reverse=True)[:10]
+        top_drivers = [{"feature": f, "importance": round(float(imp), 4)} for f, imp in feat_imp]
+
+        y_pos = range(len(feat_imp))
+        ax1.barh(y_pos, [x[1] for x in reversed(feat_imp)], color='#8B6F3E', edgecolor='#4A3B2C', alpha=0.9)
+        ax1.set_yticks(y_pos)
+        ax1.set_yticklabels([x[0] for x in reversed(feat_imp)], fontsize=10)
+        ax1.set_xlabel("Predictive Importance", fontsize=10, fontweight='bold', color='#1A1208')
+        ax1.set_title(f"Key Drivers of {target_col}", fontsize=12, fontweight='bold', color='#1A1208', pad=10)
+        ax1.grid(axis='x', linestyle='--', alpha=0.5)
+
+        cm = confusion_matrix(y_test, y_pred)
+        sns.heatmap(cm, annot=True, fmt="d", cmap="YlOrBr", ax=ax2, cbar=False,
+                    xticklabels=target_classes[:len(cm)], yticklabels=target_classes[:len(cm)])
+        ax2.set_xlabel("Predicted Class", fontsize=10, fontweight='bold', color='#1A1208')
+        ax2.set_ylabel("True Class", fontsize=10, fontweight='bold', color='#1A1208')
+        ax2.set_title(f"Confusion Matrix (Acc: {acc:.1%})", fontsize=12, fontweight='bold', color='#1A1208', pad=10)
+
+    else:
+        reg = RandomForestRegressor(n_estimators=100, max_depth=7, random_state=42)
+        reg.fit(X_train, y_train)
+        y_pred = reg.predict(X_test)
+        r2 = float(r2_score(y_test, y_pred))
+        rmse = float(np.sqrt(mean_squared_error(y_test, y_pred)))
+        mae = float(mean_absolute_error(y_test, y_pred))
+        metrics = {
+            "task": "regression",
+            "r2_score": round(r2, 4),
+            "rmse": round(rmse, 4),
+            "mae": round(mae, 4)
+        }
+        importances = reg.feature_importances_
+        feat_imp = sorted(zip(feature_cols, importances), key=lambda x: x[1], reverse=True)[:10]
+        top_drivers = [{"feature": f, "importance": round(float(imp), 4)} for f, imp in feat_imp]
+
+        y_pos = range(len(feat_imp))
+        ax1.barh(y_pos, [x[1] for x in reversed(feat_imp)], color='#8B6F3E', edgecolor='#4A3B2C', alpha=0.9)
+        ax1.set_yticks(y_pos)
+        ax1.set_yticklabels([x[0] for x in reversed(feat_imp)], fontsize=10)
+        ax1.set_xlabel("Predictive Importance", fontsize=10, fontweight='bold', color='#1A1208')
+        ax1.set_title(f"Key Drivers of {target_col}", fontsize=12, fontweight='bold', color='#1A1208', pad=10)
+        ax1.grid(axis='x', linestyle='--', alpha=0.5)
+
+        ax2.scatter(y_test, y_pred, alpha=0.6, color='#8B6F3E', edgecolor='#4A3B2C', s=35)
+        min_v = min(y_test.min(), y_pred.min())
+        max_v = max(y_test.max(), y_pred.max())
+        ax2.plot([min_v, max_v], [min_v, max_v], color='#A23B2A', linestyle='--', linewidth=1.5, label='Ideal Fit (y=x)')
+        ax2.set_xlabel(f"Actual {target_col}", fontsize=10, fontweight='bold', color='#1A1208')
+        ax2.set_ylabel(f"Predicted {target_col}", fontsize=10, fontweight='bold', color='#1A1208')
+        ax2.set_title(f"Actual vs Predicted (R²={r2:.2f})", fontsize=12, fontweight='bold', color='#1A1208', pad=10)
+        ax2.legend(loc='upper left', frameon=True, facecolor='#FAF7F2')
+        ax2.grid(True, linestyle='--', alpha=0.5)
+
+    plt.tight_layout()
+    buf = io.BytesIO()
+    plt.savefig(buf, format='png', bbox_inches='tight', facecolor=fig.get_facecolor())
+    plt.close(fig)
+    b64_chart = base64.b64encode(buf.getvalue()).decode('utf-8')
+
+    driver_names = [d['feature'] for d in top_drivers[:3]]
+    driver_str = ", ".join(driver_names) if driver_names else "features"
+    if is_classification:
+        narrative = (
+            f"Trained a Random Forest Classifier on target '{target_col}' ({len(X)} records).\n"
+            f"• Out-of-sample Accuracy: {metrics['accuracy']:.1%} | Weighted F1: {metrics['f1_score']:.2f}.\n"
+            f"• Leading predictive drivers: {driver_str}.\n"
+            f"• Executive Action: Calibrate strategy around '{top_drivers[0]['feature']}' (captures {top_drivers[0]['importance']*100:.1f}% relative predictive weight)."
+        )
+    else:
+        narrative = (
+            f"Trained a Random Forest Regressor on target '{target_col}' ({len(X)} records).\n"
+            f"• Explanatory Power (R²): {metrics['r2_score']:.2f} | RMSE: {metrics['rmse']:,.2f}.\n"
+            f"• Dominant drivers explaining variance: {driver_str}.\n"
+            f"• Executive Action: '{top_drivers[0]['feature']}' exhibits the highest marginal correlation ({top_drivers[0]['importance']*100:.1f}% weight). Interventions on this feature drive direct changes in {target_col}."
+        )
+
+    return {
+        "task_type": "classification" if is_classification else "regression",
+        "target_column": target_col,
+        "feature_columns": feature_cols,
+        "metrics": metrics,
+        "top_drivers": top_drivers,
+        "narrative": narrative,
+        "chart_base64": b64_chart
+    }
+
+
+def tool_simulate_growth_scenario(
+    df: pd.DataFrame,
+    metric_col: Optional[str] = None,
+    growth_rate_pct: float = 15.0,
+    years: int = 5
+) -> dict:
+    """Projects multi-year growth trajectories under Conservative, Base, and Aggressive scenarios with Monte Carlo uncertainty."""
+    if df.empty:
+        return {"error": "Dataset is empty"}
+
+    # Find volume/financial metric
+    if not metric_col or metric_col not in df.columns:
+        cand_metrics = [
+            c for c in df.select_dtypes(include="number").columns
+            if any(k in c.lower() for k in ["revenue", "sales", "arr", "mrr", "spend", "profit", "orders", "users", "amount", "total"])
+        ]
+        if cand_metrics:
+            metric_col = cand_metrics[0]
+        else:
+            num_cols = df.select_dtypes(include="number").columns.tolist()
+            metric_col = num_cols[0] if num_cols else None
+
+    if not metric_col:
+        return {"error": "No numeric metric found for simulation"}
+
+    series = df[metric_col].dropna()
+    baseline = float(series.sum()) if series.sum() > 0 else float(series.mean())
+    if baseline <= 0:
+        baseline = 100000.0
+
+    years = max(1, min(10, years))
+    c_rate = (growth_rate_pct * 0.5) / 100.0
+    b_rate = growth_rate_pct / 100.0
+    a_rate = (growth_rate_pct * 1.8) / 100.0
+
+    year_indices = list(range(years + 1))
+    c_path = [baseline * ((1.0 + c_rate) ** y) for y in year_indices]
+    b_path = [baseline * ((1.0 + b_rate) ** y) for y in year_indices]
+    a_path = [baseline * ((1.0 + a_rate) ** y) for y in year_indices]
+
+    # Monte Carlo simulation around base plan (250 runs)
+    np.random.seed(42)
+    mc_paths = np.zeros((250, years + 1))
+    mc_paths[:, 0] = baseline
+    for y in range(1, years + 1):
+        rand_shocks = np.random.normal(loc=b_rate, scale=0.07, size=250)
+        mc_paths[:, y] = mc_paths[:, y - 1] * (1.0 + rand_shocks)
+
+    ci_10 = np.percentile(mc_paths, 10, axis=0)
+    ci_90 = np.percentile(mc_paths, 90, axis=0)
+
+    # Plot
+    fig, ax = plt.subplots(figsize=(10, 5.5), dpi=120)
+    fig.patch.set_facecolor('#FAF7F2')
+    ax.set_facecolor('#FAF7F2')
+
+    ax.fill_between(year_indices, ci_10, ci_90, color='#8B6F3E', alpha=0.15, label='80% Monte Carlo Confidence Band')
+    ax.plot(year_indices, b_path, color='#8B6F3E', linewidth=2.8, marker='o', label=f'Base Plan (+{growth_rate_pct:.1f}% CAGR)')
+    ax.plot(year_indices, c_path, color='#4A3B2C', linewidth=2.0, linestyle='--', marker='s', label=f'Conservative (+{growth_rate_pct*0.5:.1f}% CAGR)')
+    ax.plot(year_indices, a_path, color='#2D5A43', linewidth=2.0, linestyle='-.', marker='^', label=f'Aggressive (+{growth_rate_pct*1.8:.1f}% CAGR)')
+
+    # Labels and end annotations
+    ax.set_title(f"Strategic Growth Trajectory Simulation: {metric_col.upper()} (Years 0–{years})", fontsize=12, fontweight='bold', color='#1A1208', pad=12)
+    ax.set_xlabel("Projection Horizon (Years from Today)", fontsize=10, fontweight='bold', color='#1A1208')
+    ax.set_ylabel(f"Projected {metric_col}", fontsize=10, fontweight='bold', color='#1A1208')
+    ax.set_xticks(year_indices)
+    ax.set_xticklabels([f"Year {y}" if y > 0 else "Current Baseline" for y in year_indices])
+    ax.grid(True, linestyle='--', alpha=0.5)
+    ax.legend(loc='upper left', frameon=True, facecolor='#FAF7F2')
+
+    # Format numbers nicely
+    ax.yaxis.set_major_formatter(matplotlib.ticker.FuncFormatter(lambda x, p: f"{x:,.0f}"))
+
+    # End point annotation
+    ax.annotate(f"Base Target:\n{b_path[-1]:,.0f}", xy=(years, b_path[-1]),
+                xytext=(years - 0.7, b_path[-1] * 1.05),
+                arrowprops=dict(facecolor='#8B6F3E', shrink=0.08, width=1.5, headwidth=6),
+                fontweight='bold', fontsize=9, color='#1A1208',
+                bbox=dict(boxstyle="round,pad=0.3", fc="#EDE4D0", ec="#8B6F3E", lw=1))
+
+    plt.tight_layout()
+    buf = io.BytesIO()
+    plt.savefig(buf, format='png', bbox_inches='tight', facecolor=fig.get_facecolor())
+    plt.close(fig)
+    b64_chart = base64.b64encode(buf.getvalue()).decode('utf-8')
+
+    table_data = []
+    for y in year_indices:
+        table_data.append({
+            "year": f"Year {y}" if y > 0 else "Baseline",
+            "conservative": round(c_path[y], 2),
+            "base": round(b_path[y], 2),
+            "aggressive": round(a_path[y], 2),
+            "p10_uncertainty": round(ci_10[y], 2),
+            "p90_uncertainty": round(ci_90[y], 2)
+        })
+
+    narrative = (
+        f"Simulated {years}-year growth scenarios for {metric_col} starting from baseline {baseline:,.0f}:\n"
+        f"• Base Case (+{growth_rate_pct:.1f}% CAGR): reaches {b_path[-1]:,.0f} by Year {years} (+{((b_path[-1]/baseline)-1)*100:.1f}% cumulative gain).\n"
+        f"• Conservative Downside (+{growth_rate_pct*0.5:.1f}% CAGR): reaches {c_path[-1]:,.0f}.\n"
+        f"• Aggressive Upside (+{growth_rate_pct*1.8:.1f}% CAGR): reaches {a_path[-1]:,.0f}.\n"
+        f"• Monte Carlo Risk Analysis: 80% of stochastic paths fall within {ci_10[-1]:,.0f} – {ci_90[-1]:,.0f} at horizon."
+    )
+
+    return {
+        "metric_name": metric_col,
+        "baseline_value": baseline,
+        "years": years,
+        "growth_rate_pct": growth_rate_pct,
+        "table": table_data,
+        "narrative": narrative,
+        "chart_base64": b64_chart
+    }
+
+
+def tool_generate_strategic_roadmap(
+    report_context: str,
+    dataset_info: str,
+    focus_area: str = "all",
+    horizon_days: int = 90
+) -> dict:
+    """Uses LLM reasoning to produce a 30-60-90 Day Strategic Execution Roadmap with owners, OKRs, and KPIs."""
+    prompt = f"""You are a Principal Management Consultant and Chief Strategy Officer.
+Formulate a rigorous 30-60-90 Day Strategic Execution Roadmap for this organization based on the dataset findings.
+
+FOCUS AREA: {focus_area}
+HORIZON: {horizon_days} Days
+
+DATASET & BUSINESS CONTEXT:
+{dataset_info[:1500]}
+
+KEY FINDINGS & METRICS:
+{report_context[:4000]}
+
+STRUCTURE YOUR PLAN INTO 3 DISTINCT PHASES:
+- Phase 1: Days 1 to 30 (Immediate Wins & Risk Remediation)
+- Phase 2: Days 31 to 60 (Operational Optimization & Core Engine Calibration)
+- Phase 3: Days 61 to 90 (Strategic Moats, Scaled Expansion & Predictive Automation)
+
+For EACH phase, provide 2 to 3 high-impact initiatives.
+Each initiative must specify:
+- title: concise action title
+- objective: 1-2 sentence core objective
+- owner: functional team (e.g. "Growth / RevOps", "Data Science", "Product")
+- kpi_target: concrete quantifiable target metric
+- expected_impact: projected financial or efficiency outcome
+- difficulty: "Low" | "Medium" | "High"
+
+Return ONLY a valid JSON object matching this schema:
+{{
+  "executive_rationale": "High-level strategic narrative (3-4 sentences)",
+  "phases": [
+    {{
+      "phase_name": "Phase 1: Days 1-30 (Immediate Triage)",
+      "timeframe": "Days 1-30",
+      "initiatives": [ ... ]
+    }},
+    {{
+      "phase_name": "Phase 2: Days 31-60 (Systematic Optimization)",
+      "timeframe": "Days 31-60",
+      "initiatives": [ ... ]
+    }},
+    {{
+      "phase_name": "Phase 3: Days 61-90 (Strategic Scaling)",
+      "timeframe": "Days 61-90",
+      "initiatives": [ ... ]
+    }}
+  ]
+}}"""
+
+    messages = [
+        {"role": "system", "content": "You are a Chief Strategy Officer. Produce actionable, high-ROI 30-60-90 day execution roadmaps in strict JSON format."},
+        {"role": "user", "content": prompt}
+    ]
+
+    try:
+        from app.utils import parse_json_safely
+        resp = chat_completion(messages, task="report", json_mode=True, timeout=120)
+        parsed = parse_json_safely(resp)
+        if not parsed.get("phases"):
+            raise ValueError("No phases returned in roadmap")
+    except Exception as e:
+        logger.warning(f"Roadmap LLM generation error: {e}, using analytical template fallback")
+        parsed = {
+            "executive_rationale": "Prioritize high-leverage bottlenecks identified in initial audit before scaling acquisition or expanding operational footprint.",
+            "phases": [
+                {
+                    "phase_name": "Phase 1: Days 1-30 (Immediate Triage & Remediation)",
+                    "timeframe": "Days 1-30",
+                    "initiatives": [
+                        {"title": "Stem High-Risk Attrition Leaks", "objective": "Flag and intervene on top customer/segment churn indicators.", "owner": "RevOps & Retention", "kpi_target": "5-10% churn reduction in 30 days", "expected_impact": "Stabilize monthly base run-rate", "difficulty": "Low"},
+                        {"title": "Pricing & Discount Threshold Audit", "objective": "Realign aggressive discount tiers to prevent margin dilution.", "owner": "Finance / Growth", "kpi_target": "+2.5% Gross Margin recovery", "expected_impact": "Direct margin uplift", "difficulty": "Medium"}
+                    ]
+                },
+                {
+                    "phase_name": "Phase 2: Days 31-60 (Systematic Optimization)",
+                    "timeframe": "Days 31-60",
+                    "initiatives": [
+                        {"title": "Cohort-Specific Activation Flows", "objective": "Deploy tailored onboarding and value milestones for lagging cohorts.", "owner": "Product Marketing", "kpi_target": "+15% 30-day cohort retention", "expected_impact": "Accelerate LTV expansion", "difficulty": "Medium"},
+                        {"title": "Feature Importance Automation", "objective": "Incorporate ML driver signals directly into daily operational dashboards.", "owner": "Data Engineering", "kpi_target": "100% daily signal refresh", "expected_impact": "Proactive decision capability", "difficulty": "Medium"}
+                    ]
+                },
+                {
+                    "phase_name": "Phase 3: Days 61-90 (Strategic Scaling & Moats)",
+                    "timeframe": "Days 61-90",
+                    "initiatives": [
+                        {"title": "Automated Counterfactual Simulation", "objective": "Embed causal elasticity modeling into quarterly budgeting cycles.", "owner": "Executive Team", "kpi_target": "100% capital allocations validated", "expected_impact": "Eliminate misallocated spend", "difficulty": "High"}
+                    ]
+                }
+            ]
+        }
+
+    # Format into markdown as well
+    md_lines = [f"### 🗺️ Strategic Execution Roadmap ({horizon_days}-Day Horizon)\n", f"**Executive Strategy:** {parsed.get('executive_rationale', '')}\n"]
+    for phase in parsed.get("phases", []):
+        md_lines.append(f"#### 📅 {phase.get('phase_name', '')}")
+        for init in phase.get("initiatives", []):
+            md_lines.append(
+                f"- **{init.get('title')}** `[{init.get('difficulty')} Difficulty | Owner: {init.get('owner')}]`\n"
+                f"  - *Objective*: {init.get('objective')}\n"
+                f"  - *Target KPI*: `{init.get('kpi_target')}` | *Expected Impact*: {init.get('expected_impact')}"
+            )
+        md_lines.append("")
+
+    return {
+        "phases": parsed.get("phases", []),
+        "executive_rationale": parsed.get("executive_rationale", ""),
+        "markdown": "\n".join(md_lines)
+    }
+
+
+def tool_run_causal_what_if(
+    df: pd.DataFrame,
+    treatment_col: Optional[str] = None,
+    outcome_col: Optional[str] = None,
+    delta_change_pct: float = 10.0
+) -> dict:
+    """Calculates causal treatment elasticity and simulates counterfactual outcome shift with sensitivity curves."""
+    if df.empty:
+        return {"error": "Dataset is empty"}
+
+    num_cols = df.select_dtypes(include="number").columns.tolist()
+    if len(num_cols) < 2:
+        return {"error": "At least two numeric variables are required for causal what-if simulation"}
+
+    if not treatment_col or treatment_col not in df.columns:
+        cand_treatments = [c for c in num_cols if any(k in c.lower() for k in ["discount", "price", "spend", "cost", "hours", "tenure", "rate", "salary"])]
+        treatment_col = cand_treatments[0] if cand_treatments else num_cols[0]
+
+    if not outcome_col or outcome_col not in df.columns or outcome_col == treatment_col:
+        cand_outcomes = [c for c in num_cols if c != treatment_col and any(k in c.lower() for k in ["churn", "revenue", "sales", "score", "performance", "rating", "orders", "conversion"])]
+        outcome_col = cand_outcomes[0] if cand_outcomes else [c for c in num_cols if c != treatment_col][0]
+
+    # Clean subset
+    covariates = [c for c in num_cols if c not in (treatment_col, outcome_col)][:4]
+    cols_to_use = [treatment_col, outcome_col] + covariates
+    sub_df = df[cols_to_use].dropna().copy()
+
+    if len(sub_df) < 15:
+        return {"error": f"Insufficient non-null rows ({len(sub_df)}) for causal modeling"}
+
+    X_mat = sub_df[[treatment_col] + covariates].values
+    y_vec = sub_df[outcome_col].values
+
+    # Fit Ridge regression with controls
+    ridge = Ridge(alpha=1.0)
+    ridge.fit(X_mat, y_vec)
+    beta = float(ridge.coef_[0])
+
+    t_mean = float(sub_df[treatment_col].mean())
+    y_mean = float(sub_df[outcome_col].mean())
+
+    # Elasticity: % change in Y per 1% change in X
+    elasticity = (beta * (t_mean / y_mean)) if y_mean != 0 else beta
+
+    # Counterfactual simulation
+    shift_factor = 1.0 + (delta_change_pct / 100.0)
+    X_cf = X_mat.copy()
+    X_cf[:, 0] = X_cf[:, 0] * shift_factor
+
+    y_pred_baseline = ridge.predict(X_mat)
+    y_pred_cf = ridge.predict(X_cf)
+
+    mean_baseline = float(np.mean(y_pred_baseline))
+    mean_cf = float(np.mean(y_pred_cf))
+    delta_abs = mean_cf - mean_baseline
+    delta_pct = (delta_abs / mean_baseline * 100.0) if mean_baseline != 0 else 0.0
+
+    # Sensitivity range: -30% to +30%
+    sensitivity_pcts = np.linspace(-30, 30, 25)
+    sensitivity_outcomes = [mean_baseline + beta * (t_mean * (p / 100.0)) for p in sensitivity_pcts]
+
+    # Plot
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(13, 5), dpi=120)
+    fig.patch.set_facecolor('#FAF7F2')
+    ax1.set_facecolor('#FAF7F2')
+    ax2.set_facecolor('#FAF7F2')
+
+    # Subplot 1: Sensitivity curve
+    ax1.plot(sensitivity_pcts, sensitivity_outcomes, color='#8B6F3E', linewidth=2.5, label='Predicted Outcome Response')
+    ax1.scatter([0], [mean_baseline], color='#1A1208', s=70, zorder=5, label='Current Baseline')
+    ax1.scatter([delta_change_pct], [mean_cf], color='#A23B2A', s=80, marker='*', zorder=5, label=f'Intervention (+{delta_change_pct:.0f}%)')
+    ax1.axvline(0, color='#D4C9B0', linestyle=':')
+    ax1.axhline(mean_baseline, color='#D4C9B0', linestyle=':')
+    ax1.set_xlabel(f"Percentage Change in {treatment_col} (%)", fontsize=10, fontweight='bold', color='#1A1208')
+    ax1.set_ylabel(f"Projected {outcome_col}", fontsize=10, fontweight='bold', color='#1A1208')
+    ax1.set_title(f"Sensitivity Curve: {treatment_col} → {outcome_col}", fontsize=11, fontweight='bold', color='#1A1208')
+    ax1.legend(loc='best', frameon=True, facecolor='#FAF7F2')
+    ax1.grid(True, linestyle='--', alpha=0.5)
+
+    # Subplot 2: Bar / Distribution comparison
+    labels = ['Baseline', f'What-If (+{delta_change_pct:.0f}%)']
+    values = [mean_baseline, mean_cf]
+    colors = ['#4A3B2C', '#8B6F3E']
+    bars = ax2.bar(labels, values, color=colors, width=0.45, edgecolor='#1A1208')
+    for bar in bars:
+        h = bar.get_height()
+        ax2.annotate(f"{h:,.2f}",
+                     xy=(bar.get_x() + bar.get_width() / 2, h),
+                     xytext=(0, 4), textcoords="offset points",
+                     ha='center', va='bottom', fontweight='bold', fontsize=10)
+    ax2.set_ylabel(f"Mean Expected {outcome_col}", fontsize=10, fontweight='bold', color='#1A1208')
+    ax2.set_title(f"Expected Shift: {delta_pct:+.2f}% ({delta_abs:+,.2f})", fontsize=11, fontweight='bold', color='#1A1208')
+    ax2.grid(axis='y', linestyle='--', alpha=0.5)
+
+    plt.tight_layout()
+    buf = io.BytesIO()
+    plt.savefig(buf, format='png', bbox_inches='tight', facecolor=fig.get_facecolor())
+    plt.close(fig)
+    b64_chart = base64.b64encode(buf.getvalue()).decode('utf-8')
+
+    narrative = (
+        f"Simulated Counterfactual Causal Shift: {treatment_col} changed by {delta_change_pct:+.1f}%.\n"
+        f"• Baseline Expected {outcome_col}: {mean_baseline:,.2f} → Projected: {mean_cf:,.2f} ({delta_pct:+.2f}% shift).\n"
+        f"• Estimated Marginal Elasticity: {elasticity:.3f} (for every 1% shift in {treatment_col}, {outcome_col} shifts by ~{elasticity:.3f}%).\n"
+        f"• Strategic Verdict: {'Positive outcome momentum expected.' if delta_abs > 0 else 'Negative outcome pressure detected; caution advised on aggressive shift.'}"
+    )
+
+    return {
+        "treatment_column": treatment_col,
+        "outcome_column": outcome_col,
+        "delta_change_pct": delta_change_pct,
+        "baseline_mean": mean_baseline,
+        "counterfactual_mean": mean_cf,
+        "delta_absolute": delta_abs,
+        "delta_percentage": delta_pct,
+        "elasticity": elasticity,
+        "chart_base64": b64_chart,
+        "narrative": narrative
+    }
+
+
+def tool_execute_custom_code(df: pd.DataFrame, code: str) -> dict:
+    """Executes arbitrary analyst Python code against df in a secured sandbox environment."""
+    exec_res = execute_analysis_code(code, df, timeout_seconds=45)
+    chart_base64_list = []
+    for out in exec_res.agent_outputs:
+        if out.get("type") == "image" and isinstance(out.get("data"), (bytes, bytearray)):
+            chart_base64_list.append(base64.b64encode(out["data"]).decode("utf-8"))
+
+    return {
+        "success": exec_res.success,
+        "stdout": exec_res.stdout or "",
+        "stderr": exec_res.stderr or "",
+        "charts": chart_base64_list
+    }
+
+
+# ==============================================================================
+# TOOL REST ENDPOINTS
+# ==============================================================================
+
+@router.post("/reports/{report_id}/tools/train-model")
+async def api_tool_train_model(report_id: str, body: TrainModelRequest):
+    """Trains a custom predictive model on the report dataset."""
+    if report_id not in reports_db:
+        raise HTTPException(status_code=404, detail="Report not found")
+    report_data = reports_db[report_id]
+    df = _get_report_dataframe(report_id, report_data)
+    if df.empty:
+        raise HTTPException(status_code=400, detail="Underlying dataset not available")
+    res = tool_train_custom_model(df, target_col=body.target_col, feature_cols=body.feature_cols)
+    if "error" in res:
+        raise HTTPException(status_code=400, detail=res["error"])
+    return res
+
+
+@router.post("/reports/{report_id}/tools/simulate-growth")
+async def api_tool_simulate_growth(report_id: str, body: SimulateGrowthRequest):
+    """Runs a 5-10 year multi-scenario growth projection with Monte Carlo uncertainty."""
+    if report_id not in reports_db:
+        raise HTTPException(status_code=404, detail="Report not found")
+    report_data = reports_db[report_id]
+    df = _get_report_dataframe(report_id, report_data)
+    if df.empty:
+        raise HTTPException(status_code=400, detail="Underlying dataset not available")
+    res = tool_simulate_growth_scenario(df, metric_col=body.metric_col, growth_rate_pct=body.growth_rate_pct, years=body.years)
+    if "error" in res:
+        raise HTTPException(status_code=400, detail=res["error"])
+    return res
+
+
+@router.post("/reports/{report_id}/tools/roadmap")
+async def api_tool_roadmap(report_id: str, body: RoadmapRequest):
+    """Generates a structured 30-60-90 Day Strategic Execution Roadmap."""
+    if report_id not in reports_db:
+        raise HTTPException(status_code=404, detail="Report not found")
+    report_data = reports_db[report_id]
+    df = _get_report_dataframe(report_id, report_data)
+    report_context, dataset_info = _build_rich_context(report_data, df)
+    res = tool_generate_strategic_roadmap(report_context, dataset_info, focus_area=body.focus_area, horizon_days=body.horizon_days)
+    return res
+
+
+@router.post("/reports/{report_id}/tools/causal-what-if")
+async def api_tool_causal_what_if(report_id: str, body: CausalWhatIfRequest):
+    """Simulates counterfactual interventions and marginal causal elasticity."""
+    if report_id not in reports_db:
+        raise HTTPException(status_code=404, detail="Report not found")
+    report_data = reports_db[report_id]
+    df = _get_report_dataframe(report_id, report_data)
+    if df.empty:
+        raise HTTPException(status_code=400, detail="Underlying dataset not available")
+    res = tool_run_causal_what_if(df, treatment_col=body.treatment_col, outcome_col=body.outcome_col, delta_change_pct=body.delta_change_pct)
+    if "error" in res:
+        raise HTTPException(status_code=400, detail=res["error"])
+    return res
+
+
+@router.post("/reports/{report_id}/tools/execute-code")
+async def api_tool_execute_code(report_id: str, body: ExecuteCodeRequest):
+    """Executes custom Python analysis code on dataset in sandbox."""
+    if report_id not in reports_db:
+        raise HTTPException(status_code=404, detail="Report not found")
+    report_data = reports_db[report_id]
+    df = _get_report_dataframe(report_id, report_data)
+    if df.empty:
+        raise HTTPException(status_code=400, detail="Underlying dataset not available")
+    res = tool_execute_custom_code(df, body.code)
+    return res
+
+
+@router.post("/reports/{report_id}/tools/export-memo")
+async def api_tool_export_memo(report_id: str, body: ExportChatRequest):
+    """Exports chat investigation history into a polished executive memo document."""
+    if report_id not in reports_db:
+        raise HTTPException(status_code=404, detail="Report not found")
+    report_data = reports_db[report_id]
+    report = report_data.get("report", {})
+    filename = report_data.get("filename", "Dataset")
+
+    html_content = f"""<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8"/>
+<title>{body.title} - GenQ Analytics</title>
+<style>
+  body {{ font-family: 'DM Mono', monospace, sans-serif; background-color: #F5F0E8; color: #1A1208; margin: 40px; }}
+  .header {{ border-bottom: 2px solid #8B6F3E; padding-bottom: 20px; margin-bottom: 30px; }}
+  h1 {{ font-family: 'Playfair Display', serif; font-size: 28px; margin: 0 0 10px 0; color: #1A1208; }}
+  .meta {{ font-size: 13px; color: #6B5B4E; }}
+  .summary {{ background: #EDE4D0; padding: 20px; border-left: 4px solid #8B6F3E; border-radius: 4px; margin-bottom: 30px; }}
+  .chat-turn {{ margin-bottom: 20px; padding: 15px; border-radius: 6px; }}
+  .user-msg {{ background: #FAF7F2; border: 1px solid #D4C9B0; }}
+  .assistant-msg {{ background: #FFFFFF; border: 1px solid #8B6F3E; }}
+  .role {{ font-weight: bold; text-transform: uppercase; font-size: 11px; color: #8B6F3E; margin-bottom: 6px; }}
+  pre {{ background: #FAF7F2; padding: 10px; border-radius: 4px; overflow-x: auto; }}
+</style>
+</head>
+<body>
+  <div class="header">
+    <h1>{body.title}</h1>
+    <div class="meta">Dataset: <strong>{filename}</strong> | GenQ Copilot Strategic Briefing</div>
+  </div>
+  <div class="summary">
+    <div style="font-weight: bold; margin-bottom: 8px;">Executive Baseline:</div>
+    <div>{report.get('executiveSummary', report.get('executive_summary', 'No summary available.'))[:800]}</div>
+  </div>
+  <div class="conversation">
+    <h2>Interactive Analytical Dialogue</h2>
+"""
+    for msg in body.history:
+        cls = "user-msg" if msg.role == "user" else "assistant-msg"
+        html_content += f"""
+    <div class="chat-turn {cls}">
+      <div class="role">{msg.role}</div>
+      <div>{msg.content.replace(chr(10), '<br/>')}</div>
+    </div>
+"""
+
+    html_content += """
+  </div>
+</body>
+</html>
+"""
+    return Response(content=html_content, media_type="text/html")
+
+
 async def get_ranked_insights(report_id: str):
     """
     Returns all findings across the report ranked by impact score.

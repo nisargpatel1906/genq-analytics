@@ -6,6 +6,7 @@ import { Button } from '../components/ui/Button';
 import { API_URL, apiHeaders } from '../lib/api';
 import { useAnalysisStore } from '../store/useAnalysisStore';
 import { AgentPipelineTracker } from '../components/AgentPipelineTracker';
+import { DiscoveryAlignmentCard } from '../components/DiscoveryAlignmentCard';
 
 export function Upload() {
   const [isDragging, setIsDragging] = useState(false);
@@ -21,10 +22,10 @@ export function Upload() {
     setErrorMessage,
     setAgentProgress,
     setAuditScore,
+    discoveryProfile,
+    setDiscoveryProfile,
     clearJobState,
   } = useAnalysisStore();
-
-  // The AgentPipelineTracker component manages live SSE streaming and resilient polling.
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -42,6 +43,7 @@ export function Upload() {
     setJobId(null);
     setAgentProgress([]);
     setAuditScore(null);
+    setDiscoveryProfile(null);
     
     const formData = new FormData();
     formData.append('file', selectedFile);
@@ -55,6 +57,12 @@ export function Upload() {
       const data = await res.json();
       if (data.job_id) {
         setJobId(data.job_id);
+        if (data.discovery_profile) {
+          setDiscoveryProfile(data.discovery_profile);
+          setStatus('awaiting_alignment');
+        } else {
+          setStatus('analyzing');
+        }
       } else {
         setStatus('error');
       }
@@ -62,7 +70,7 @@ export function Upload() {
       setStatus('error');
       setErrorMessage(e.message || 'Failed to connect to the backend server.');
     }
-  }, [setStatus, setProgress, setJobId, setAgentProgress, setAuditScore, setErrorMessage]);
+  }, [setStatus, setProgress, setJobId, setAgentProgress, setAuditScore, setDiscoveryProfile, setErrorMessage]);
 
   const isValidFile = useCallback((file: File) => {
     const name = file.name.toLowerCase();
@@ -102,21 +110,30 @@ export function Upload() {
     clearJobState();
   };
 
-  return (
-    <div className="w-full h-full flex flex-col items-center justify-start pt-16 pb-20 px-6">
-      <div className={`w-full transition-all duration-300 ${status !== 'idle' && status !== 'error' ? 'max-w-[760px]' : 'max-w-[520px]'}`}>
-        
-        {/* Header */}
-        <div className="text-center mb-10">
-          <h1 className="font-heading text-[40px] font-bold text-fg leading-tight mb-3">
-            Initialize Analysis
-          </h1>
-          <p className="font-body text-[14px] text-fg/60 leading-relaxed">
-            Upload your structured dataset to begin the automated insight extraction process. Supported formats: CSV, TSV, JSON…
-          </p>
-        </div>
+  const containerMaxWidth =
+    status === 'awaiting_alignment'
+      ? 'max-w-[880px]'
+      : status !== 'idle' && status !== 'error'
+      ? 'max-w-[760px]'
+      : 'max-w-[520px]';
 
-        {/* Drop Zone (Hide when analysis is active to focus on the pipeline) */}
+  return (
+    <div className="w-full h-full flex flex-col items-center justify-start pt-12 pb-20 px-6">
+      <div className={`w-full transition-all duration-300 ${containerMaxWidth}`}>
+        
+        {/* Header (only show when idle or error) */}
+        {(status === 'idle' || status === 'error') && (
+          <div className="text-center mb-10">
+            <h1 className="font-heading text-[40px] font-bold text-fg leading-tight mb-3">
+              Initialize Analysis
+            </h1>
+            <p className="font-body text-[14px] text-fg/60 leading-relaxed">
+              Upload your structured dataset to begin the automated insight extraction process. Supported formats: CSV, TSV, XLSX…
+            </p>
+          </div>
+        )}
+
+        {/* State 1: Drop Zone (idle or error) */}
         {status === 'idle' || status === 'error' ? (
           <div
             onDragOver={handleDragOver}
@@ -137,7 +154,7 @@ export function Upload() {
             <div className="flex flex-col items-center pointer-events-none">
               <FileText className={`w-10 h-10 mb-4 stroke-1 ${status === 'error' ? 'text-error/80' : 'text-accent/60'}`} />
               <h2 className="font-heading text-[22px] text-fg mb-2">
-                {status === 'error' ? 'Analysis Failed' : 'Drop your CSV'}
+                {status === 'error' ? 'Analysis Failed' : 'Drop your CSV or Excel'}
               </h2>
               <p className={`font-body text-[13px] mb-6 ${status === 'error' ? 'text-error/80 max-w-[350px]' : 'text-fg/60'}`}>
                 {status === 'error' ? errorMessage : 'or click to browse from your local directory'}
@@ -156,9 +173,23 @@ export function Upload() {
           </div>
         ) : null}
 
-        {/* Autonomous Agent Pipeline Tracker */}
+        {/* State 2: Business Discovery & Alignment Card */}
         <AnimatePresence>
-          {status !== 'idle' && status !== 'error' && (
+          {status === 'awaiting_alignment' && discoveryProfile && jobId && (
+            <DiscoveryAlignmentCard
+              jobId={jobId}
+              profile={discoveryProfile}
+              onLaunch={() => {
+                setStatus('analyzing');
+              }}
+              onCancel={cancelAnalysis}
+            />
+          )}
+        </AnimatePresence>
+
+        {/* State 3: Autonomous Agent Pipeline Tracker */}
+        <AnimatePresence>
+          {status !== 'idle' && status !== 'error' && status !== 'awaiting_alignment' && (
             <motion.div
               initial={{ opacity: 0, y: 15 }}
               animate={{ opacity: 1, y: 0 }}
@@ -175,7 +206,7 @@ export function Upload() {
                 <div className="p-6 bg-surface border border-border rounded-[16px] flex items-center justify-center gap-3">
                   <div className="w-5 h-5 border-2 border-accent border-t-transparent rounded-full animate-spin" />
                   <span className="font-body text-[14px] text-fg font-medium">
-                    Uploading dataset and initializing autonomous agent team...
+                    Pre-scanning dataset schema and generating discovery profile...
                   </span>
                 </div>
               )}

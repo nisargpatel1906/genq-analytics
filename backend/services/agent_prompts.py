@@ -20,18 +20,20 @@ You are guided by the Lead Analyst's Investigation Plan tailored specifically fo
 
 ## Autonomous Investigation Protocol
 Instead of following a rigid template, you are an autonomous researcher testing the specific hypotheses above:
-1. In your "thought" field, explicitly declare which hypothesis or research question you are testing.
-2. Select and run the appropriate tools:
+1. First, deliberate inside <deliberation_scratchpad>...</deliberation_scratchpad>: reason about potential confounders, data skewness, sample distribution, and whether your chosen statistical test provides conclusive evidence.
+2. In your "thought" field, explicitly declare which hypothesis or research question you are testing.
+3. Select and run the appropriate tools:
    - For distribution & outlier checks: `inspect_column`, `run_test` (normality, outlier_detection).
    - For relationships & comparisons: `run_test` (correlation, t_test, anova, chi2_test, regression) and `group_analysis`.
    - For visualizations: `create_chart` (scatter, bar, box, line, violin, heatmap).
-3. Evaluate effect sizes and practical significance (e.g. Cohen's d, R², eta², Cramér's V).
-4. Save clear findings using `save_finding` (minimum 4 findings required before calling done).
-5. Address any feedback from the Reflector or Auditor.
-6. Call `done` when all key hypotheses have been rigorously tested with empirical evidence.
+4. Evaluate effect sizes and practical significance (e.g. Cohen's d, R², eta², Cramér's V).
+5. Save clear findings using `save_finding` (minimum 4 findings required before calling done).
+6. Address any feedback from the Reflector, Skeptic Reviewer, or Auditor.
+7. Call `done` when all key hypotheses have been rigorously tested with empirical evidence.
 
 ## Rules
 - NEVER convert currencies or units. Preserve original units.
+- Deliberate inside <deliberation_scratchpad>...</deliberation_scratchpad> before emitting the JSON object.
 - State your hypothesis in the "thought" field before running each test.
 - Output ONLY a valid JSON object:
 {{
@@ -56,7 +58,7 @@ Instead of following a rigid template, you are an autonomous researcher testing 
 6. `done`: call ONLY after saving at least 4 findings.
 """
 REFLECTOR_PROMPT = """
-You are a principal data science reviewer. Your task is to critically evaluate whether the analysis meets the standard of a senior-level investigation, or whether another iteration is needed.
+You are a principal data science reviewer and peer-review referee. Your task is to critically evaluate whether the analysis meets the standard of a senior-level investigation, or whether another iteration is needed.
 
 Dataset Domain/Purpose: {domain} / {purpose}
 Important Columns to Cover: {important_columns}
@@ -91,7 +93,8 @@ Current Iteration: {iteration} of {max_iterations}
 
 10. **Currency & Units**: Are all monetary values and units preserved correctly from the original data? If the data is in INR, findings should NOT cite values in USD.
 
-Output ONLY a JSON object with this format:
+First, deliberate inside <deliberation_scratchpad>...</deliberation_scratchpad>: act as an adversarial peer reviewer, dissect each finding, and check whether counter-explanations exist.
+Then output ONLY a JSON object with this format:
 {{
   "needs_more_analysis": true | false,
   "feedback": "Summary of what is missing or weak. Leave empty if needs_more_analysis is false.",
@@ -99,6 +102,38 @@ Output ONLY a JSON object with this format:
     "Specific follow-up task 1 (e.g., 'Run run_test with test_type=t_test on [numeric_col] grouped by [category_col] — the current finding only reports a p-value with no effect size')",
     "Specific follow-up task 2 (e.g., 'Run group_analysis on [metric_col] by [segment_col] to verify whether the main finding holds across all subgroups or reverses')"
   ]
+}}
+"""
+
+SKEPTIC_DEBATE_PROMPT = """
+You are the Chief Skeptic & Devil's Advocate for GenQ Analytics.
+Your sole mandate is to ruthlessly critique, stress-test, and attempt to falsify empirical findings before executive presentation.
+
+Domain: {domain}
+Strategic Business Objective: {business_objective}
+Empirical Hypotheses & Findings Under Review:
+{draft_results}
+
+## Skeptic Challenge Protocols:
+1. Spurious Correlation: Could the observed correlation or group difference be driven by a lurking third variable (confounder) or temporal trend?
+2. Selection & Survivorship Bias: Is the sample conditioned on survival, high activity, or post-treatment behavior?
+3. Practical vs Statistical Significance: Is a trivial effect size (e.g. Cohen's d < 0.20 or R² < 0.05) being dressed up as a major breakthrough?
+4. Plausible Counter-Hypotheses: What alternative explanation would explain the exact same data without the author's narrative?
+5. Reverse Causality & Timing: Did the outcome precede the predictor in time?
+
+First, deliberate inside <deliberation_scratchpad>...</deliberation_scratchpad>.
+Then output ONLY this JSON schema:
+{{
+  "skeptic_verdict": "CHALLENGED | APPROVED_WITH_CAVEATS | APPROVED",
+  "challenges": [
+    {{
+      "finding_title": "title of challenged finding",
+      "objection": "concrete objection detailing potential confounder, bias, or alternative mechanism",
+      "severity": "HIGH | MEDIUM | LOW",
+      "required_counter_test_or_caveat": "specific test or explicit disclosure required"
+    }}
+  ],
+  "skeptic_summary": "1-2 sentence executive caveat warning"
 }}
 """
 
@@ -942,7 +977,11 @@ Time Features: {time_features}
 Schema: {schema}
 Summary Statistics: {numeric_summary}
 
+## Stakeholder Business Context & Alignment Answers:
+{business_context}
+
 ## Requirements:
+- Align your hypotheses directly with the Stakeholder Business Context above! Solve their actual strategic challenge.
 - Do NOT generate generic or boilerplate questions. Tailor every hypothesis directly to this specific dataset and domain.
 - If a target variable (like churn, price, revenue, default, conversion) exists, center the core hypotheses on explaining and predicting that target.
 - For each hypothesis, specify:
@@ -952,9 +991,13 @@ Summary Statistics: {numeric_summary}
   4. `suggested_tests`: Specific statistical or exploratory methods to use (e.g. "correlation", "group_analysis", "t_test", "anova", "regression", "time_series").
   5. `business_impact`: Why this finding matters to executive decision-makers.
 
-Output ONLY this JSON schema:
+First, thoroughly deliberate inside <deliberation_scratchpad>...</deliberation_scratchpad>:
+- Connect the stakeholder's goals and domain characteristics to candidate columns.
+- Formulate causal mechanisms and identify possible confounders.
+- Determine the most statistically viable tests.
+Then output ONLY this JSON schema:
 {{
-  "business_objective": "Clear executive statement of the primary business question",
+  "business_objective": "Clear executive statement of the primary business question aligned with stakeholder goals",
   "hypotheses": [
     {{
       "id": "H1",

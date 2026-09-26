@@ -403,7 +403,9 @@ def analyze_dataframe(
     df: pd.DataFrame,
     progress_callback: ProgressCallback | None = None,
     job_id: str | None = None,
-    relational_manifest: dict | None = None
+    relational_manifest: dict | None = None,
+    business_context: dict | None = None,
+    selected_modules: list[str] | None = None,
 ) -> dict:
     """
     Main entry point. Orchestrates the full agentic pipeline with:
@@ -411,6 +413,7 @@ def analyze_dataframe(
     - Per-agent payload trimming to manage token budgets
     - Optional full-data validation spot-check
     - Automatic quality auditing with targeted regeneration (up to 3 rounds)
+    - Business discovery alignment & selective module execution
     """
     full_row_count = len(df)
     df = normalize_dataframe_types(df)
@@ -494,6 +497,10 @@ def analyze_dataframe(
         )
         if relational_manifest:
             state.relational_manifest = relational_manifest
+        if business_context:
+            state.business_context = business_context
+        if selected_modules is not None:
+            state.selected_modules = selected_modules
         
         # Copy current profile stage progress into the state
         state.stages_progress = stage_state.copy()

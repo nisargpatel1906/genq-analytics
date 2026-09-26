@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
-import { Sparkles, Send, MessageSquare, X, Loader2, Bot, User, FileText, AlertTriangle, Target, ShieldCheck, CheckCircle2, RefreshCw } from 'lucide-react';
+import { Sparkles, Send, MessageSquare, X, Loader2, Bot, User, FileText, AlertTriangle, Target, ShieldCheck, CheckCircle2, RefreshCw, Zap, Brain, GitBranch, Download } from 'lucide-react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { Button } from '../components/ui/Button';
 import { Badge } from '../components/ui/Badge';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -25,6 +27,7 @@ function ChatPanel({ reportId, onClose }: { reportId: string; onClose: () => voi
   const messages = getMessages(reportId);
   const [input, setInput] = useState('');
   const [thinking, setThinking] = useState(false);
+  const [exportingMemo, setExportingMemo] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -43,6 +46,31 @@ function ChatPanel({ reportId, onClose }: { reportId: string; onClose: () => voi
       })
       .catch(() => setProviderLabel('Configured AI provider'));
   }, []);
+
+  const handleExportMemo = async () => {
+    setExportingMemo(true);
+    try {
+      const resp = await fetch(`${API_URL}/api/reports/${reportId}/tools/export-memo`, {
+        method: 'POST',
+        headers: apiHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ title: 'Executive Analysis Briefing Memo', history: messages }),
+      });
+      if (!resp.ok) throw new Error('Failed to export memo');
+      const blob = await resp.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `Executive_Memo_${reportId}.html`;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+    } catch (e) {
+      console.error('Memo export failed', e);
+    } finally {
+      setExportingMemo(false);
+    }
+  };
 
   const send = async (text: string) => {
     if (!text.trim() || thinking) return;
@@ -114,12 +142,61 @@ function ChatPanel({ reportId, onClose }: { reportId: string; onClose: () => voi
             <Sparkles className="w-3.5 h-3.5 text-white" />
           </div>
           <div>
-            <p className="font-body font-semibold text-[13px] text-fg">Report Assistant</p>
+            <p className="font-body font-semibold text-[13px] text-fg">Copilot Analytics Suite</p>
             <p className="font-body text-[10px] text-fg/50">Powered by {providerLabel}</p>
           </div>
         </div>
         <button onClick={onClose} className="text-fg/40 hover:text-fg transition-colors p-1">
           <X className="w-4 h-4" />
+        </button>
+      </div>
+
+      {/* Action Tool Pills Bar */}
+      <div className="px-3 py-2 border-b border-border bg-bg/60 flex items-center gap-1.5 overflow-x-auto text-[11px] font-mono no-scrollbar">
+        <button
+          onClick={() => send("Simulate 5-year growth trajectory with Monte Carlo uncertainty bands for the primary revenue/volume metric")}
+          disabled={thinking}
+          className="flex-shrink-0 px-2.5 py-1 rounded-full border border-accent/40 bg-accent/5 hover:bg-accent/15 text-fg transition-all flex items-center gap-1.5"
+          title="Run 5-year multi-scenario growth projection"
+        >
+          <Zap className="w-3 h-3 text-accent" />
+          <span>Growth Sim</span>
+        </button>
+        <button
+          onClick={() => send("Train a predictive machine learning model to uncover top drivers and evaluate model fit")}
+          disabled={thinking}
+          className="flex-shrink-0 px-2.5 py-1 rounded-full border border-accent/40 bg-accent/5 hover:bg-accent/15 text-fg transition-all flex items-center gap-1.5"
+          title="Train Random Forest classifier/regressor and rank top drivers"
+        >
+          <Brain className="w-3 h-3 text-accent" />
+          <span>Train Model</span>
+        </button>
+        <button
+          onClick={() => send("Generate a 30-60-90 day strategic execution roadmap with prioritized initiatives, OKRs and owners")}
+          disabled={thinking}
+          className="flex-shrink-0 px-2.5 py-1 rounded-full border border-accent/40 bg-accent/5 hover:bg-accent/15 text-fg transition-all flex items-center gap-1.5"
+          title="Generate structured 30-60-90 day tactical roadmap"
+        >
+          <Target className="w-3 h-3 text-accent" />
+          <span>Roadmap</span>
+        </button>
+        <button
+          onClick={() => send("Run a causal what-if sensitivity analysis simulating counterfactual shift in treatment")}
+          disabled={thinking}
+          className="flex-shrink-0 px-2.5 py-1 rounded-full border border-accent/40 bg-accent/5 hover:bg-accent/15 text-fg transition-all flex items-center gap-1.5"
+          title="Estimate marginal elasticity and counterfactual impact"
+        >
+          <GitBranch className="w-3 h-3 text-accent" />
+          <span>What-If</span>
+        </button>
+        <button
+          onClick={handleExportMemo}
+          disabled={exportingMemo}
+          className="flex-shrink-0 px-2.5 py-1 rounded-full border border-border bg-surface hover:bg-bg text-fg transition-all flex items-center gap-1.5"
+          title="Export chat findings as standalone Executive Briefing Memo"
+        >
+          <Download className="w-3 h-3 text-fg/60" />
+          <span>{exportingMemo ? 'Exporting…' : 'Export Memo'}</span>
         </button>
       </div>
 
@@ -132,12 +209,31 @@ function ChatPanel({ reportId, onClose }: { reportId: string; onClose: () => voi
             }`}>
               {m.role === 'user' ? <User className="w-3.5 h-3.5" /> : <Bot className="w-3.5 h-3.5" />}
             </div>
-            <div className={`max-w-[85%] rounded-xl px-3 py-2.5 ${
+            <div className={`max-w-[85%] rounded-xl px-3.5 py-2.5 ${
               m.role === 'user'
                 ? 'bg-fg text-bg font-body text-[13px]'
-                : 'bg-bg border border-border text-fg font-body text-[13px] leading-relaxed'
+                : 'bg-bg border border-border text-fg font-body text-[13px] leading-relaxed shadow-sm'
             }`}>
-              {m.content}
+              {m.role === 'user' ? (
+                m.content
+              ) : (
+                <div className="prose prose-sm max-w-none text-fg prose-p:my-1.5 prose-headings:font-heading prose-table:border prose-table:border-border prose-th:bg-surface prose-th:p-1.5 prose-td:p-1.5 prose-img:rounded-lg prose-img:border prose-img:border-border prose-img:my-2">
+                  <ReactMarkdown
+                    remarkPlugins={[remarkGfm]}
+                    components={{
+                      img: ({ src, alt }) => (
+                        <img
+                          src={src}
+                          alt={alt || 'Analysis Chart'}
+                          className="rounded-lg border border-border my-2 max-w-full shadow-sm"
+                        />
+                      ),
+                    }}
+                  >
+                    {m.content}
+                  </ReactMarkdown>
+                </div>
+              )}
             </div>
           </div>
         ))}

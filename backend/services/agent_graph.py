@@ -36,6 +36,7 @@ from app.utils import parse_json_safely
 from services.agent_prompts import (
     DATA_SCIENTIST_PROMPT,
     REFLECTOR_PROMPT,
+    SKEPTIC_DEBATE_PROMPT,
     VIZ_CODER_PROMPT,
     REPORT_WRITER_PROMPT,
     AUDITOR_PROMPT,
@@ -126,6 +127,11 @@ class AnalysisGraphState(TypedDict, total=False):
     ml_results: Dict[str, Any]
     experiment_results: Dict[str, Any]
     relational_manifest: Dict[str, Any]
+
+    # Discovery Alignment & Selective Execution
+    business_context: Dict[str, Any]
+    selected_modules: List[str]
+    skeptic_critique: List[Dict[str, Any]]
 
     # NEW: Data Quality Gate
     data_quality_score: int
@@ -225,6 +231,11 @@ class AnalysisState:
         self.ml_results: Dict[str, Any] = {}
         self.experiment_results: Dict[str, Any] = {}
         self.relational_manifest: Dict[str, Any] = {}
+
+        # Discovery Alignment & Selective execution
+        self.business_context: Dict[str, Any] = {}
+        self.selected_modules: List[str] = []
+        self.skeptic_critique: List[Dict[str, Any]] = []
 
         # NEW agent results
         self.data_quality_score: int = 0
@@ -568,6 +579,12 @@ def hypothesis_planner_node(state: AnalysisGraphState) -> dict:
     potential_targets = stats_dict.get("potential_targets", [])
     time_features = stats_dict.get("time_features", {})
 
+    biz_ctx = state.get("business_context", {})
+    if biz_ctx:
+        biz_ctx_str = "\n".join([f"- {k.replace('_', ' ').title()}: {v}" for k, v in biz_ctx.items()])
+    else:
+        biz_ctx_str = "No custom answers provided. Focus on high-impact executive strategic goals and core business levers."
+
     prompt = HYPOTHESIS_PLANNER_PROMPT.format(
         domain=domain_brief.get("domain", "Unknown"),
         purpose=domain_brief.get("datasetPurpose", "Analyze data relationships"),
@@ -577,6 +594,7 @@ def hypothesis_planner_node(state: AnalysisGraphState) -> dict:
         time_features=json.dumps(time_features),
         schema=json.dumps(schema, default=str),
         numeric_summary=json.dumps(numeric_summary, default=str)[:3000],
+        business_context=biz_ctx_str,
     )
 
     messages = [
@@ -590,6 +608,8 @@ def hypothesis_planner_node(state: AnalysisGraphState) -> dict:
         parsed = parse_json_safely(response)
         if "error" not in parsed and ("hypotheses" in parsed or "business_objective" in parsed):
             plan = parsed
+            if biz_ctx and "business_objective" in biz_ctx and not plan.get("business_objective"):
+                plan["business_objective"] = biz_ctx["business_objective"]
     except Exception as e:
         logger.warning(f"Hypothesis planner LLM error: {e}")
 
@@ -1203,14 +1223,55 @@ def reflector_node(state: AnalysisGraphState) -> dict:
         "result": f"Needs more analysis: {res_json.get('needs_more_analysis')}. Feedback: {res_json.get('feedback')}"
     })
 
-    can_reflect = bool(res_json.get("needs_more_analysis")) and (ref_iter < max_ref)
+    # ── Adversarial Skeptic Debate Review ────────────────────────────────────
+    skeptic_critique = list(state.get("skeptic_critique", []))
+    skeptic_results = {}
+    try:
+        skeptic_prompt = SKEPTIC_DEBATE_PROMPT.format(
+            domain=state.get("domain_brief", {}).get("domain", "Unknown"),
+            business_objective=state.get("investigation_plan", {}).get("business_objective", "Analyze dataset"),
+            draft_results=json.dumps(state.get("analysis_results", {}), default=str)[:3500],
+        )
+        skeptic_messages = [
+            {"role": "system", "content": "You are the Chief Skeptic & Devil's Advocate. Ruthlessly challenge hypotheses. Output JSON only."},
+            {"role": "user", "content": skeptic_prompt}
+        ]
+        skeptic_resp = chat_completion(skeptic_messages, task="review", json_mode=True, timeout=timeout_val)
+        skeptic_parsed = parse_json_safely(skeptic_resp)
+        if "error" not in skeptic_parsed and ("challenges" in skeptic_parsed or "skeptic_verdict" in skeptic_parsed):
+            skeptic_results = skeptic_parsed
+            new_challenges = skeptic_parsed.get("challenges", [])
+            skeptic_critique.extend(new_challenges)
+            investigation_log.append({
+                "agent": "skeptic_analyst",
+                "round": ref_iter,
+                "action": "Conducted Adversarial Skeptic Debate",
+                "verdict": skeptic_parsed.get("skeptic_verdict", "CHALLENGED"),
+                "summary": skeptic_parsed.get("skeptic_summary", ""),
+                "challenges_count": len(new_challenges)
+            })
+    except Exception as se:
+        logger.warning(f"Skeptic debate loop execution warning: {se}")
+
+    can_reflect = (bool(res_json.get("needs_more_analysis")) or skeptic_results.get("skeptic_verdict") == "CHALLENGED") and (ref_iter < max_ref)
     next_ref_iter = (ref_iter + 1) if can_reflect else ref_iter
 
     if can_reflect:
         feedback = res_json.get("feedback", "")
-        follow_up_tasks = res_json.get("follow_up_tasks", [])
+        follow_up_tasks = list(res_json.get("follow_up_tasks", []))
 
-        feedback_str = f"Summary feedback from Reflector: {feedback}\n"
+        # Integrate skeptic challenges into follow_up tasks
+        for c in skeptic_results.get("challenges", []):
+            req = c.get("required_counter_test_or_caveat")
+            if req and req not in follow_up_tasks:
+                follow_up_tasks.append(f"[Skeptic Challenge: {c.get('severity','HIGH')}]: {req}")
+
+        feedback_str = f"Summary feedback from Reflector & Skeptic Review:\n"
+        if feedback:
+            feedback_str += f"- Reflector: {feedback}\n"
+        if skeptic_results.get("skeptic_summary"):
+            feedback_str += f"- Skeptic Challenge: {skeptic_results.get('skeptic_summary')}\n"
+
         if follow_up_tasks:
             feedback_str += "Please perform the following follow-up tasks in your script:\n"
             for task in follow_up_tasks:
@@ -1230,6 +1291,7 @@ def reflector_node(state: AnalysisGraphState) -> dict:
             "follow_up_tasks": follow_up_tasks,
             "reflection_feedback_formatted": feedback_str,
             "investigation_log": investigation_log,
+            "skeptic_critique": skeptic_critique,
             "_can_reflect": True
         }
     else:
@@ -1291,15 +1353,44 @@ def viz_preprocessor_node(state: AnalysisGraphState) -> dict:
 
     timeout_val = int(os.environ.get("LLM_TIMEOUT", "300"))
     res_json = {}
-    for attempt in range(3):
+    for attempt in range(2):
         try:
             use_json_mode = (attempt == 0)
             response = chat_completion(messages, task="review", json_mode=use_json_mode, timeout=timeout_val)
             res_json = parse_json_safely(response)
-            if "error" not in res_json and "visualizations" in res_json:
+            if isinstance(res_json, dict) and "error" not in res_json and "visualizations" in res_json:
                 break
         except Exception as e:
             logger.warning(f"Visualization Preprocessor attempt {attempt + 1} failed: {e}")
+
+    # Robust fallback: construct default chart specifications if LLM JSON parsing failed
+    if not isinstance(res_json, dict) or "visualizations" not in res_json or not res_json.get("visualizations"):
+        logger.info("Using analytical fallback for visualization preprocessor specifications")
+        findings = state.get("analysis_results", {}).get("findings", [])
+        schema = state.get("schema", {})
+        num_cols = [c for c, d in schema.items() if any(t in str(d).lower() for t in ["int", "float", "num"])]
+        fallback_viz = []
+        for i, f in enumerate(findings[:3]):
+            fallback_viz.append({
+                "finding_title": f.get("title", f"Analytical Finding {i+1}"),
+                "chart_type": "bar" if len(num_cols) > 0 else "histogram",
+                "x_axis": num_cols[0] if num_cols else "index",
+                "y_axis": num_cols[1] if len(num_cols) > 1 else (num_cols[0] if num_cols else "count"),
+                "x_unit": "",
+                "y_unit": "",
+                "data_points": {}
+            })
+        if not fallback_viz and num_cols:
+            fallback_viz.append({
+                "finding_title": f"Distribution of {num_cols[0]}",
+                "chart_type": "histogram",
+                "x_axis": num_cols[0],
+                "y_axis": "Frequency",
+                "x_unit": "",
+                "y_unit": "count",
+                "data_points": {}
+            })
+        res_json = {"visualizations": fallback_viz}
 
     num_specs = len(res_json.get("visualizations", [])) if isinstance(res_json, dict) else 0
     publish_stage_progress(
@@ -3371,7 +3462,7 @@ def senior_tier_dispatch_node(state):
     publish_stage_progress(state, "causal_analyst", "running",
                            f"Senior Analyst Tier: Launching {'parallel' if parallel_enabled else 'sequential'} specialist agents (Causal, Forecast, Anomaly, A/B, ML, Cohort, Benchmark)...")
 
-    agents = [
+    all_agents = [
         ("causal_analyst", causal_analyst_node),
         ("forecaster", forecaster_node),
         ("anomaly_detector", anomaly_detector_node),
@@ -3381,9 +3472,34 @@ def senior_tier_dispatch_node(state):
         ("benchmarking", benchmarking_node),
     ]
 
+    selected_modules = state.get("selected_modules")
+    if selected_modules and len(selected_modules) > 0:
+        agents = [ag for ag in all_agents if ag[0] in selected_modules]
+        skipped = [ag[0] for ag in all_agents if ag[0] not in selected_modules]
+    else:
+        agents = all_agents
+        skipped = []
+
     combined = {}
 
-    if parallel_enabled:
+    for s_name in skipped:
+        publish_stage_progress(state, s_name, "completed", "Bypassed by alignment configuration (compute & cost saved)")
+        if s_name == "causal_analyst":
+            combined["causal_results"] = {"skipped": True, "bypassed": True, "causal_summary": "Causal analysis was bypassed based on user module alignment."}
+        elif s_name == "forecaster":
+            combined["forecast_results"] = {"skipped": True, "bypassed": True, "time_column": None}
+        elif s_name == "anomaly_detector":
+            combined["anomaly_results"] = {"skipped": True, "bypassed": True, "anomalies": []}
+        elif s_name == "experimentation":
+            combined["experiment_results"] = {"skipped": True, "bypassed": True, "is_experiment": False}
+        elif s_name == "ml_modeler":
+            combined["ml_results"] = {"skipped": True, "bypassed": True, "summary": "ML modeling was bypassed based on user module alignment."}
+        elif s_name == "cohort_analyst":
+            combined["cohort_results"] = {"skipped": True, "bypassed": True, "summary": "Cohort analysis was bypassed based on user module alignment."}
+        elif s_name == "benchmarking":
+            combined["benchmark_results"] = {"skipped": True, "bypassed": True, "benchmarks": []}
+
+    if parallel_enabled and agents:
         def run_agent(agent_name_fn):
             agent_name, fn = agent_name_fn
             try:
@@ -3795,6 +3911,10 @@ class AgentGraph:
                 "cohort_results": dict(getattr(self.state, "cohort_results", {})),
                 "benchmark_results": dict(getattr(self.state, "benchmark_results", {})),
                 "presentation_results": dict(getattr(self.state, "presentation_results", {})),
+                # Discovery Alignment & Selective execution
+                "business_context": dict(getattr(self.state, "business_context", {})),
+                "selected_modules": list(getattr(self.state, "selected_modules", [])),
+                "skeptic_critique": list(getattr(self.state, "skeptic_critique", [])),
             }
 
             job_lbl = self.state.job_id or 'anonymous'
@@ -3836,6 +3956,14 @@ class AgentGraph:
             # NEW agent sync-back
             self.state.data_quality_score = final_state.get("data_quality_score", getattr(self.state, "data_quality_score", 0))
             self.state.data_quality_gate_decision = final_state.get("data_quality_gate_decision", getattr(self.state, "data_quality_gate_decision", "PASS"))
+            self.state.data_quality_issues = final_state.get("data_quality_issues", getattr(self.state, "data_quality_issues", []))
+            self.state.cohort_results = final_state.get("cohort_results", getattr(self.state, "cohort_results", {}))
+            self.state.benchmark_results = final_state.get("benchmark_results", getattr(self.state, "benchmark_results", {}))
+            self.state.presentation_results = final_state.get("presentation_results", getattr(self.state, "presentation_results", {}))
+            # Discovery Alignment sync-back
+            self.state.business_context = final_state.get("business_context", getattr(self.state, "business_context", {}))
+            self.state.selected_modules = final_state.get("selected_modules", getattr(self.state, "selected_modules", []))
+            self.state.skeptic_critique = final_state.get("skeptic_critique", getattr(self.state, "skeptic_critique", []))
             self.state.data_quality_issues = final_state.get("data_quality_issues", getattr(self.state, "data_quality_issues", []))
             self.state.cohort_results = final_state.get("cohort_results", getattr(self.state, "cohort_results", {}))
             self.state.benchmark_results = final_state.get("benchmark_results", getattr(self.state, "benchmark_results", {}))

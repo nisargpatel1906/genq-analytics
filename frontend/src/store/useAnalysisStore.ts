@@ -1,7 +1,49 @@
 import { create } from 'zustand';
 import { API_URL, apiHeaders } from '../lib/api';
 
-export type JobProgressStatus = 'idle' | 'uploading' | 'mapping' | 'analyzing' | 'visualizing' | 'complete' | 'error';
+export type JobProgressStatus = 'idle' | 'uploading' | 'awaiting_alignment' | 'mapping' | 'analyzing' | 'visualizing' | 'complete' | 'error';
+
+export interface DiscoveryQuestion {
+  id: string;
+  title: string;
+  description: string;
+  category: string;
+  options: string[];
+  default: string;
+  allow_custom: boolean;
+  custom_placeholder: string;
+}
+
+export interface ModuleViability {
+  id: string;
+  name: string;
+  role: string;
+  description?: string;
+  viable: boolean;
+  recommended: boolean;
+  reason: string;
+  token_savings_pct: number;
+}
+
+export interface DiscoveryProfile {
+  domain: string;
+  domain_confidence: number;
+  domain_description: string;
+  dataset_summary: string;
+  viable_modules: ModuleViability[];
+  questions: DiscoveryQuestion[];
+  detected_characteristics: {
+    has_time: boolean;
+    time_column: string | null;
+    has_id: boolean;
+    id_column: string | null;
+    has_variant: boolean;
+    variant_column: string | null;
+    target_candidates: string[];
+    numeric_count: number;
+    categorical_count: number;
+  };
+}
 
 export interface AgentProgress {
   id: string;
@@ -33,6 +75,9 @@ export interface BackendJobStatus {
   regeneration_round?: number;
   error?: string;
   cancelled?: boolean;
+  discovery_profile?: DiscoveryProfile;
+  selected_modules?: string[];
+  business_context?: Record<string, string>;
 }
 
 export interface ChartItem {
@@ -133,6 +178,9 @@ interface AnalysisState {
   pipelineStages: PipelineStageDef[];
   currentAgent: string | null;
 
+  // Discovery Alignment Tracking
+  discoveryProfile: DiscoveryProfile | null;
+
   // Report Tracking
   currentReportId: string | null;
   currentReportData: ReportData | null;
@@ -157,6 +205,8 @@ interface AnalysisState {
   setAuditScore: (score: number | null) => void;
   setJobStatus: (status: BackendJobStatus | null) => void;
   setJobError: (error: string | null) => void;
+  setDiscoveryProfile: (profile: DiscoveryProfile | null) => void;
+  alignJob: (jobId: string, answers: Record<string, string>, selectedModules: string[], quickAuto?: boolean) => Promise<void>;
   applyJobUpdate: (jobData: BackendJobStatus) => void;
   clearJobState: () => void;
 
@@ -194,6 +244,7 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
   auditScore: null,
   jobStatus: null,
   jobError: null,
+  discoveryProfile: null,
 
   // Report Initial State
   currentReportId: null,
@@ -225,10 +276,53 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
   setAuditScore: (auditScore) => set({ auditScore }),
   setJobStatus: (jobStatus) => set({ jobStatus }),
   setJobError: (jobError) => set({ jobError }),
+  setDiscoveryProfile: (discoveryProfile) => set({ discoveryProfile }),
+  alignJob: async (jobId: string, answers: Record<string, string>, selectedModules: string[], quickAuto = false) => {
+    try {
+      set({
+        status: 'analyzing',
+        progress: 5,
+        backendStatus: 'Aligning business priorities and launching selective analytical agents...',
+      });
+      const url = quickAuto ? `${API_URL}/api/jobs/${jobId}/auto-analyze` : `${API_URL}/api/jobs/${jobId}/align`;
+      const body = quickAuto ? {} : { answers, selected_modules: selectedModules, quick_auto: false };
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { ...apiHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || 'Failed to align and launch job');
+      }
+      const data = await res.json();
+      set({ backendStatus: data.status || 'Pipeline launched with aligned context' });
+    } catch (err: any) {
+      set({
+        status: 'error',
+        errorMessage: err.message || 'Alignment launch failed',
+        jobError: err.message || 'Alignment launch failed',
+      });
+    }
+  },
   applyJobUpdate: (jobData) => {
+    const isAwaitingAlignment = jobData.status === 'awaiting_discovery_alignment';
     const isComplete = jobData.status === 'Complete' || jobData.step === 3 || jobData.step === 4;
     const isError = jobData.status === 'Failed' || !!jobData.error;
     const isCancelled = jobData.status === 'Cancelled' || !!jobData.cancelled;
+
+    if (isAwaitingAlignment) {
+      set((state) => ({
+        jobStatus: jobData,
+        backendStatus: 'Awaiting Business Discovery & Alignment',
+        status: 'awaiting_alignment',
+        discoveryProfile: jobData.discovery_profile || state.discoveryProfile,
+        dataMeta: (jobData.rows && jobData.columns)
+          ? { rows: jobData.rows, columns: jobData.columns }
+          : state.dataMeta,
+      }));
+      return;
+    }
 
     const stages = (jobData.pipeline_stages && jobData.pipeline_stages.length > 0)
       ? jobData.pipeline_stages
@@ -270,6 +364,7 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
     auditScore: null,
     jobStatus: null,
     jobError: null,
+    discoveryProfile: null,
   }),
 
   // Report Actions
